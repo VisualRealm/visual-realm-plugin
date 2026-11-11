@@ -106,6 +106,9 @@ class VR_MCP {
 		}
 
 		$is_batch = array_keys( $payload ) === range( 0, count( $payload ) - 1 );
+		if ( $is_batch && count( $payload ) > 20 ) {
+			self::send( 400, self::error( null, -32600, 'Batch too large (20 messages max).' ) );
+		}
 		$messages = $is_batch ? $payload : array( $payload );
 		$out      = array();
 		$version  = '';
@@ -212,7 +215,7 @@ class VR_MCP {
 	protected static function instructions() {
 		$site = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
 		return sprintf(
-			'These tools manage the WordPress site "%1$s" (%2$s). New posts and pages are drafts unless status "publish" is passed. wp_update_post never changes status or dates unless you pass them. For large page bodies, create the post with the first part and add the rest with wp_append_content. wp_alter_post replaces exact text and fails unless the match count equals "expected" (default 1). Every write is logged; mcp_list_changes shows the log and mcp_undo_change reverts one change. After editing a published page, call vr_purge_cache for that page. Use wp_get_rendered to confirm text on the live page.',
+			'These tools manage the WordPress site "%1$s" (%2$s). New posts and pages are drafts unless status "publish" is passed. wp_update_post never changes status or dates unless you pass them. For large page bodies, create the post with the first part and add the rest with wp_append_content. wp_alter_post replaces exact text and fails unless the match count equals "expected" (default 1). Every write is logged; mcp_list_changes shows the log and mcp_undo_change reverts one change. After editing a published page, call vr_purge_cache for that page; edits to Avada layout sections, menus or global elements automatically purge the whole site, including WP Rocket used CSS and Avada compiled CSS. Use wp_get_rendered to confirm text on the live page (count strings, or find to see surrounding HTML). Large options such as fusion_options: read one part with wp_get_option key. Menu labels and links: wp_update_menu_item / wp_delete_menu_item. Read SVG or other uploaded files with wp_get_file.',
 			$site,
 			home_url()
 		);

@@ -265,14 +265,21 @@ class VR_OAuth {
 		if ( $is_url ) {
 			$stale = ! $row || empty( $row['fetched_at'] ) || strtotime( $row['fetched_at'] . ' UTC' ) < time() - DAY_IN_SECONDS;
 			if ( $stale ) {
+				if ( ! $row && ! self::rate_ok( 'cimd', 30, HOUR_IN_SECONDS ) ) {
+					return null;
+				}
 				$doc = self::fetch_client_metadata( $client_id );
 				if ( ! $doc ) {
+					return $row ? self::hydrate_client( $row ) : null;
+				}
+				$uris = array_values( array_filter( array_filter( (array) $doc['redirect_uris'], 'is_string' ), array( 'VR_Settings', 'redirect_allowed' ) ) );
+				if ( empty( $uris ) ) {
 					return $row ? self::hydrate_client( $row ) : null;
 				}
 				$data = array(
 					'client_id'     => $client_id,
 					'client_name'   => isset( $doc['client_name'] ) ? sanitize_text_field( $doc['client_name'] ) : '',
-					'redirect_uris' => wp_json_encode( array_values( $doc['redirect_uris'] ) ),
+					'redirect_uris' => wp_json_encode( $uris ),
 					'source'        => 'cimd',
 					'fetched_at'    => VR_DB::now(),
 				);
@@ -417,7 +424,7 @@ class VR_OAuth {
 		if ( '' === $redirect && 1 === count( $client['redirect_uris'] ) ) {
 			$redirect = $client['redirect_uris'][0];
 		}
-		if ( '' === $redirect || ! in_array( $redirect, $client['redirect_uris'], true ) || ! VR_Settings::redirect_allowed( $redirect ) ) {
+		if ( '' === $redirect || ! self::client_has_redirect( $client, $redirect ) || ! VR_Settings::redirect_allowed( $redirect ) ) {
 			self::error_page( __( 'This connection request has a return address this site does not allow.', 'visual-realm' ) );
 		}
 		$params['redirect_uri'] = $redirect;
@@ -472,6 +479,32 @@ class VR_OAuth {
 		}
 
 		self::consent_page( $client, $params, $user );
+	}
+
+	/**
+	 * Whether a client registered this redirect URI. Loopback callbacks match
+	 * on host and path with the port ignored (RFC 8252 7.3).
+	 *
+	 * @param array  $client   Client.
+	 * @param string $redirect Redirect URI.
+	 * @return bool
+	 */
+	protected static function client_has_redirect( array $client, $redirect ) {
+		if ( in_array( $redirect, $client['redirect_uris'], true ) ) {
+			return true;
+		}
+		if ( ! VR_Settings::is_loopback( $redirect ) ) {
+			return false;
+		}
+		$strip = function ( $u ) {
+			return preg_replace( '#^(http://(?:localhost|127\.0\.0\.1))(:\d{1,5})?#', '$1', $u );
+		};
+		foreach ( $client['redirect_uris'] as $registered ) {
+			if ( VR_Settings::is_loopback( $registered ) && $strip( $registered ) === $strip( $redirect ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -570,6 +603,9 @@ class VR_OAuth {
 		$body .= '<p>' . esc_html__( 'It will act with your account\'s permissions on this site, including:', 'visual-realm' ) . '</p>';
 		$body .= '<ul><li>' . esc_html__( 'Reading and editing pages, posts and their SEO settings', 'visual-realm' ) . '</li><li>' . esc_html__( 'Uploading and updating media', 'visual-realm' ) . '</li><li>' . esc_html__( 'Changing site options and clearing caches', 'visual-realm' ) . '</li></ul>';
 		$body .= '<p>' . esc_html__( 'Every change is logged and can be undone. You can disconnect any time under the Visual Realm menu in WordPress admin.', 'visual-realm' ) . '</p>';
+		if ( VR_Settings::is_loopback( $params['redirect_uri'] ) ) {
+			$body .= '<p><strong>' . esc_html__( 'This connection returns to an app on your own computer (Claude Code). Only allow it if you started this from Claude Code just now.', 'visual-realm' ) . '</strong></p>';
+		}
 		$body .= '<div class="meta">' . esc_html( sprintf( /* translators: 1: user, 2: host */ __( 'Signed in as %1$s · returns to %2$s', 'visual-realm' ), $user->user_login, $host ) ) . '</div>';
 		$body .= '<form method="post" action="' . esc_url( home_url( '/vr-oauth/authorize' ) ) . '">' . $fields;
 		$body .= '<div class="row"><button type="submit" name="decision" value="deny">' . esc_html__( 'Cancel', 'visual-realm' ) . '</button><button class="primary" type="submit" name="decision" value="approve">' . esc_html__( 'Allow', 'visual-realm' ) . '</button></div></form>';
@@ -642,8 +678,9 @@ class VR_OAuth {
 			$code = isset( $post['code'] ) ? (string) $post['code'] : '';
 			$key  = 'vr_code_' . hash( 'sha256', $code );
 			$data = '' === $code ? false : get_transient( $key );
-			delete_transient( $key );
-			if ( ! is_array( $data ) || $data['client_id'] !== $client['client_id'] ) {
+			// Only the request that actually deletes the code may use it.
+			$won = is_array( $data ) && delete_transient( $key );
+			if ( ! $won || $data['client_id'] !== $client['client_id'] ) {
 				self::token_error( 'invalid_grant', 'Code is invalid or expired.' );
 			}
 			$redirect = isset( $post['redirect_uri'] ) ? (string) $post['redirect_uri'] : '';
@@ -679,7 +716,12 @@ class VR_OAuth {
 				self::revoke_family( $row['family'] );
 				self::token_error( 'invalid_grant', 'User no longer has access.' );
 			}
-			$wpdb->update( VR_DB::table( 'tokens' ), array( 'revoked' => 1 ), array( 'id' => $row['id'] ) );
+			// Rotate atomically: if another request already used this token, treat it as reuse.
+			$won = (int) $wpdb->query( $wpdb->prepare( 'UPDATE ' . VR_DB::table( 'tokens' ) . ' SET revoked = 1 WHERE id = %d AND revoked = 0', $row['id'] ) );
+			if ( 1 !== $won ) {
+				self::revoke_family( $row['family'] );
+				self::token_error( 'invalid_grant', 'Refresh token was already used.' );
+			}
 			self::json( self::issue_tokens( $client['client_id'], (int) $row['user_id'], $row['family'], $row['resource'] ) );
 		}
 

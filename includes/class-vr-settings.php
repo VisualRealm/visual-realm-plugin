@@ -12,18 +12,25 @@ class VR_Settings {
 	const OPTION = 'vr_settings';
 
 	/**
+	 * The callback every hosted Claude app (web, desktop, mobile) uses.
+	 */
+	const CLAUDE_CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
+
+	/**
 	 * Defaults.
 	 *
 	 * @return array
 	 */
 	public static function defaults() {
 		return array(
-			'capability'          => 'manage_options',
-			'allowed_redirects'   => "claude.ai\nclaude.com\nlocalhost\n127.0.0.1",
-			'cloudflare_zone_id'  => '',
-			'cloudflare_token'    => '',
-			'access_ttl'          => HOUR_IN_SECONDS,
-			'refresh_ttl'         => 90 * DAY_IN_SECONDS,
+			'capability'         => 'manage_options',
+			'redirect_uris'      => self::CLAUDE_CALLBACK,
+			'allow_loopback'     => 1,
+			'cloudflare_zone_id' => '',
+			'cloudflare_token'   => '',
+			'update_token'       => '',
+			'access_ttl'         => HOUR_IN_SECONDS,
+			'refresh_ttl'        => 90 * DAY_IN_SECONDS,
 		);
 	}
 
@@ -34,7 +41,9 @@ class VR_Settings {
 	 * @return mixed
 	 */
 	public static function get( $key = null ) {
-		$all = wp_parse_args( (array) get_option( self::OPTION, array() ), self::defaults() );
+		$stored = (array) get_option( self::OPTION, array() );
+		unset( $stored['allowed_redirects'] ); // Host-based list from 0.1.x, replaced by exact URIs.
+		$all = wp_parse_args( $stored, self::defaults() );
 		if ( null === $key ) {
 			return $all;
 		}
@@ -57,13 +66,51 @@ class VR_Settings {
 	}
 
 	/**
-	 * Hosts that OAuth redirect URIs may point to.
+	 * Exact redirect URIs allowed besides Claude Code's loopback callback.
 	 *
 	 * @return string[]
 	 */
-	public static function allowed_redirect_hosts() {
-		$lines = preg_split( '/[\s,]+/', strtolower( (string) self::get( 'allowed_redirects' ) ) );
-		return array_values( array_filter( array_map( 'trim', $lines ) ) );
+	public static function redirect_uris() {
+		$lines = preg_split( '/[\s,]+/', (string) self::get( 'redirect_uris' ) );
+		$uris  = array( self::CLAUDE_CALLBACK );
+		foreach ( $lines as $line ) {
+			$line = trim( $line );
+			if ( '' !== $line && self::well_formed( $line ) && 0 === strpos( $line, 'https://' ) ) {
+				$uris[] = $line;
+			}
+		}
+		return array_values( array_unique( $uris ) );
+	}
+
+	/**
+	 * Strict shape check: no backslashes, whitespace, control characters,
+	 * user info, fragments or encoded characters in the authority, and the
+	 * URI must survive WordPress's URL sanitizer unchanged.
+	 *
+	 * @param string $uri URI.
+	 * @return bool
+	 */
+	public static function well_formed( $uri ) {
+		if ( ! is_string( $uri ) || strlen( $uri ) > 512 ) {
+			return false;
+		}
+		if ( preg_match( '/[\x00-\x20\x7f\\\\@#]/', $uri ) ) {
+			return false;
+		}
+		if ( ! preg_match( '#^https?://([a-z0-9.\-]+|\[::1\])(:\d{1,5})?(/[A-Za-z0-9._~!$&\'()*+,;=:/\-]*)?(\?[A-Za-z0-9._~!$&\'()*+,;=:/?\-%]*)?$#', $uri ) ) {
+			return false;
+		}
+		return esc_url_raw( $uri ) === $uri;
+	}
+
+	/**
+	 * Whether a URI is Claude Code's loopback callback (any port, path /callback).
+	 *
+	 * @param string $uri URI.
+	 * @return bool
+	 */
+	public static function is_loopback( $uri ) {
+		return (bool) preg_match( '#^http://(localhost|127\.0\.0\.1)(:\d{1,5})?/callback$#', (string) $uri );
 	}
 
 	/**
@@ -73,20 +120,12 @@ class VR_Settings {
 	 * @return bool
 	 */
 	public static function redirect_allowed( $uri ) {
-		$parts = wp_parse_url( $uri );
-		if ( empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+		if ( ! self::well_formed( $uri ) ) {
 			return false;
 		}
-		$host  = strtolower( $parts['host'] );
-		$local = in_array( $host, array( 'localhost', '127.0.0.1', '[::1]', '::1' ), true );
-		if ( 'https' !== $parts['scheme'] && ! ( 'http' === $parts['scheme'] && $local ) ) {
-			return false;
+		if ( in_array( $uri, self::redirect_uris(), true ) ) {
+			return true;
 		}
-		foreach ( self::allowed_redirect_hosts() as $allowed ) {
-			if ( $host === $allowed || substr( $host, -strlen( '.' . $allowed ) ) === '.' . $allowed ) {
-				return true;
-			}
-		}
-		return false;
+		return self::is_loopback( $uri ) && (bool) self::get( 'allow_loopback' );
 	}
 }

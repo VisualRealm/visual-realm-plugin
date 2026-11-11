@@ -15,14 +15,24 @@ class VR_Tool_Error extends Exception {}
 class VR_Tools {
 
 	/**
-	 * Options that can never be written through the connector.
+	 * Options the connector may change: exact names.
 	 */
-	const PROTECTED_OPTIONS = array( 'siteurl', 'home', 'users_can_register', 'default_role', 'active_plugins', 'template', 'stylesheet', 'admin_email', 'new_admin_email', 'vr_settings', 'vr_db_version', 'wp_user_roles' );
+	const WRITABLE_OPTIONS = array(
+		'blogname', 'blogdescription', 'site_icon', 'show_on_front', 'page_on_front', 'page_for_posts',
+		'posts_per_page', 'posts_per_rss', 'rss_use_excerpt', 'date_format', 'time_format', 'start_of_week',
+		'timezone_string', 'gmt_offset', 'default_category', 'sidebars_widgets', 'wp_page_for_privacy_policy',
+		'thumbnail_size_w', 'thumbnail_size_h', 'medium_size_w', 'medium_size_h', 'large_size_w', 'large_size_h',
+	);
 
 	/**
-	 * Options that can never be read through the connector.
+	 * Options the connector may change: name prefixes (theme, widget, Avada and Rank Math settings).
 	 */
-	const SECRET_OPTIONS = array( 'vr_settings' );
+	const WRITABLE_PREFIXES = array( 'theme_mods_', 'widget_', 'fusion_', 'avada_', 'rank-math-options-' );
+
+	/**
+	 * Option names (or parts of names) that hold credentials and are never returned.
+	 */
+	const SECRET_PATTERN = '/(pass(word|wd)?|secret|token|api[_-]?key|private|licen[cs]e|salt|auth_key|credential|webhook)/i';
 
 	/**
 	 * Cached registry.
@@ -197,6 +207,7 @@ class VR_Tools {
 					'id'     => $id,
 					'url'    => self::p( 'string', 'URL on this site, instead of id.' ),
 					'count'  => self::p( 'array', 'Exact strings to count in the HTML.', array( 'items' => array( 'type' => 'string' ) ) ),
+					'find'   => self::p( 'string', 'Return the HTML around the first occurrence of this text.' ),
 					'offset' => self::p( 'integer', 'HTML character offset for the returned slice.' ),
 					'limit'  => self::p( 'integer', 'HTML characters to return. Default 0 (counts only).' ),
 				),
@@ -298,9 +309,40 @@ class VR_Tools {
 				array( 'menu_id' ),
 				$edit,
 			),
+			'wp_update_menu_item'  => array(
+				'Change a menu item: label, custom URL, parent or position.',
+				array(
+					'item_id'  => self::p( 'integer', 'Menu item ID (from wp_get_menus).' ),
+					'title'    => self::p( 'string', 'New label.' ),
+					'url'      => self::p( 'string', 'New URL (custom links only).' ),
+					'parent'   => self::p( 'integer', 'Parent menu item ID (0 for top level).' ),
+					'position' => self::p( 'integer', 'Menu order position.' ),
+				),
+				array( 'item_id' ),
+				$edit,
+			),
+			'wp_delete_menu_item'  => array( 'Remove an item from a menu. Undo puts it back.', array( 'item_id' => self::p( 'integer', 'Menu item ID.' ) ), array( 'item_id' ), $risk ),
+			'wp_get_file'          => array(
+				'Read an uploaded media file. Text files (SVG, CSS, JSON, TXT, CSV) return their content; images, PDFs, fonts and media return base64 when "base64" is true (2 MB max).',
+				array(
+					'id'     => self::p( 'integer', 'Attachment ID.' ),
+					'url'    => self::p( 'string', 'Or a file URL under this site\'s uploads folder.' ),
+					'base64' => self::p( 'boolean', 'Return binary files as base64. Default false.' ),
+				),
+				array(),
+				$read,
+			),
 			'wp_get_revisions'     => array( 'List revisions of a post.', array( 'id' => $id ), array( 'id' ), $read ),
 			'wp_restore_revision'  => array( 'Restore a post to a revision.', array( 'revision_id' => self::p( 'integer', 'Revision ID.' ) ), array( 'revision_id' ), $edit ),
-			'wp_get_option'        => array( 'Read a site option.', array( 'name' => self::p( 'string', 'Option name.' ) ), array( 'name' ), $read ),
+			'wp_get_option'        => array(
+				'Read a site option. For large options pass "key" (dot path, e.g. "color_palette.color4"); without it, big values return their top-level keys only.',
+				array(
+					'name' => self::p( 'string', 'Option name.' ),
+					'key'  => self::p( 'string', 'Dot path inside an array option.' ),
+				),
+				array( 'name' ),
+				$read,
+			),
 			'wp_update_option'     => array(
 				'Set a site option. Core identity and security options are blocked.',
 				array(
@@ -795,16 +837,51 @@ class VR_Tools {
 		if ( is_protected_meta( $key, 'post' ) && ! current_user_can( 'edit_post', $p->ID ) ) {
 			throw new VR_Tool_Error( 'Not allowed.' );
 		}
+		$value = $a['value'];
+		$note  = '';
+		if ( 0 === strpos( $key, 'rank_math_schema_' ) && is_array( $value ) ) {
+			// Rank Math prints a stored true as "1", which is not a valid schema.org Boolean.
+			$fixed = self::schema_booleans( $value );
+			if ( $fixed !== $value ) {
+				$value = $fixed;
+				$note  = 'true/false values were saved as "true"/"false" so Rank Math outputs valid schema.';
+			}
+		}
 		$snap = VR_Changes::snapshot_post( $p->ID, array( $key ) );
 		unset( $snap['fields'] );
-		update_post_meta( $p->ID, $key, wp_slash( $a['value'] ) );
+		update_post_meta( $p->ID, $key, wp_slash( $value ) );
 		$change = VR_Changes::record( 'wp_update_post_meta', 'post', $p->ID, sprintf( 'Set meta %s on "%s"', $key, $p->post_title ), $snap );
-		return array(
+		$out    = array(
 			'id'        => $p->ID,
 			'key'       => $key,
-			'stored'    => get_post_meta( $p->ID, $key, true ) === $a['value'] || wp_json_encode( get_post_meta( $p->ID, $key, true ) ) === wp_json_encode( $a['value'] ),
+			'stored'    => get_post_meta( $p->ID, $key, true ) === $value || wp_json_encode( get_post_meta( $p->ID, $key, true ) ) === wp_json_encode( $value ),
 			'change_id' => $change,
 		);
+		if ( '' !== $note ) {
+			$out['note'] = $note;
+		}
+		return $out;
+	}
+
+	/**
+	 * Replace booleans with "true"/"false" strings, leaving Rank Math's own metadata block alone.
+	 *
+	 * @param mixed $v Value.
+	 * @return mixed
+	 */
+	protected static function schema_booleans( $v ) {
+		if ( is_bool( $v ) ) {
+			return $v ? 'true' : 'false';
+		}
+		if ( is_array( $v ) ) {
+			foreach ( $v as $k => $item ) {
+				if ( 'metadata' === $k ) {
+					continue;
+				}
+				$v[ $k ] = self::schema_booleans( $item );
+			}
+		}
+		return $v;
 	}
 
 	protected static function tool_wp_delete_post_meta( array $a ) {
@@ -883,36 +960,61 @@ class VR_Tools {
 			}
 			$url = get_permalink( $p );
 		}
-		$home_host = wp_parse_url( home_url(), PHP_URL_HOST );
-		if ( wp_parse_url( $url, PHP_URL_HOST ) !== $home_host ) {
+		$home  = wp_parse_url( home_url() );
+		$parts = wp_parse_url( $url );
+		$same  = is_array( $parts ) && isset( $parts['scheme'], $parts['host'] )
+			&& in_array( strtolower( $parts['scheme'] ), array( 'http', 'https' ), true )
+			&& strtolower( $parts['host'] ) === strtolower( $home['host'] )
+			&& ( isset( $parts['port'] ) ? (int) $parts['port'] : null ) === ( isset( $home['port'] ) ? (int) $home['port'] : null )
+			&& ! isset( $parts['user'] ) && ! isset( $parts['pass'] )
+			&& ! preg_match( '/[\x00-\x20\x7f\\\\]/', $url );
+		if ( ! $same ) {
 			throw new VR_Tool_Error( 'URL must be on this site.' );
 		}
 		$fetch = add_query_arg( 'vr_nocache', wp_generate_password( 8, false ), $url );
 		$res   = wp_remote_get(
 			$fetch,
 			array(
-				'timeout'    => 20,
-				'sslverify'  => false,
-				'user-agent' => 'VisualRealm-Verify/' . VR_PLUGIN_VERSION,
+				'timeout'             => 20,
+				'redirection'         => 0,
+				'limit_response_size' => 8 * MB_IN_BYTES,
+				'user-agent'          => 'VisualRealm-Verify/' . VR_PLUGIN_VERSION,
 			)
 		);
 		if ( is_wp_error( $res ) ) {
 			throw new VR_Tool_Error( 'Fetch failed: ' . $res->get_error_message() );
 		}
-		$html = wp_remote_retrieve_body( $res );
-		$out  = array(
+		$status = (int) wp_remote_retrieve_response_code( $res );
+		$html   = wp_remote_retrieve_body( $res );
+		$out    = array(
 			'url'    => $url,
-			'status' => (int) wp_remote_retrieve_response_code( $res ),
+			'status' => $status,
 			'length' => strlen( $html ),
 		);
+		if ( $status >= 300 && $status < 400 ) {
+			// Redirects are reported, not followed.
+			$out['redirect_to'] = (string) wp_remote_retrieve_header( $res, 'location' );
+			return $out;
+		}
 		if ( isset( $a['count'] ) && is_array( $a['count'] ) ) {
 			$counts = array();
 			foreach ( $a['count'] as $needle ) {
 				if ( is_string( $needle ) && '' !== $needle ) {
-					$counts[ $needle ] = substr_count( $html, $needle );
+					$counts[] = array(
+						'text'  => $needle,
+						'count' => substr_count( $html, $needle ),
+					);
 				}
 			}
 			$out['counts'] = $counts;
+		}
+		$find = self::str( $a, 'find' );
+		if ( '' !== $find ) {
+			$pos = strpos( $html, $find );
+			$out['find'] = false === $pos ? null : array(
+				'offset'  => $pos,
+				'excerpt' => mb_strcut( $html, max( 0, $pos - 200 ), 900, 'UTF-8' ),
+			);
 		}
 		$limit = self::int( $a, 'limit', 0 );
 		if ( $limit > 0 ) {
@@ -1008,6 +1110,37 @@ class VR_Tools {
 			throw new VR_Tool_Error( 'Pass url or data.' );
 		}
 
+		if ( '' !== $url && filesize( $tmp ) > 50 * MB_IN_BYTES ) {
+			wp_delete_file( $tmp );
+			throw new VR_Tool_Error( 'File is over 50 MB.' );
+		}
+		$ext_ok = array( 'jpg', 'jpeg', 'jpe', 'png', 'gif', 'webp', 'avif', 'ico', 'svg', 'pdf', 'mp4', 'm4v', 'webm', 'mov', 'mp3', 'm4a', 'wav', 'ogg', 'woff', 'woff2', 'ttf', 'otf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv', 'txt', 'vtt' );
+		if ( ! in_array( strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) ), $ext_ok, true ) ) {
+			wp_delete_file( $tmp );
+			throw new VR_Tool_Error( 'That file type cannot be uploaded through the connector (images, video, audio, fonts, PDFs and office documents only).' );
+		}
+		$is_svg = 'svg' === strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
+		if ( $is_svg ) {
+			$clean = VR_SVG::sanitize( (string) file_get_contents( $tmp ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			if ( is_wp_error( $clean ) ) {
+				wp_delete_file( $tmp );
+				throw new VR_Tool_Error( $clean->get_error_message() );
+			}
+			file_put_contents( $tmp, $clean ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			$allow_mime = function ( $mimes ) {
+				$mimes['svg'] = 'image/svg+xml';
+				return $mimes;
+			};
+			$allow_type = function ( $data, $file, $name ) {
+				if ( 'svg' === strtolower( pathinfo( $name, PATHINFO_EXTENSION ) ) ) {
+					return array( 'ext' => 'svg', 'type' => 'image/svg+xml', 'proper_filename' => false );
+				}
+				return $data;
+			};
+			add_filter( 'upload_mimes', $allow_mime );
+			add_filter( 'wp_check_filetype_and_ext', $allow_type, 10, 3 );
+		}
+
 		$file = array(
 			'name'     => $filename,
 			'tmp_name' => $tmp,
@@ -1024,6 +1157,10 @@ class VR_Tools {
 			$extra['post_content'] = self::str( $a, 'description' );
 		}
 		$id = media_handle_sideload( $file, $post_id, null, $extra );
+		if ( $is_svg ) {
+			remove_filter( 'upload_mimes', $allow_mime );
+			remove_filter( 'wp_check_filetype_and_ext', $allow_type, 10 );
+		}
 		if ( is_wp_error( $id ) ) {
 			if ( file_exists( $tmp ) ) {
 				wp_delete_file( $tmp );
@@ -1256,6 +1393,168 @@ class VR_Tools {
 		);
 	}
 
+	/**
+	 * Load a nav menu item the user may edit.
+	 *
+	 * @param int $id Item ID.
+	 * @return WP_Post
+	 * @throws VR_Tool_Error When missing or forbidden.
+	 */
+	protected static function menu_item( $id ) {
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			throw new VR_Tool_Error( 'Not allowed.' );
+		}
+		$item = get_post( (int) $id );
+		if ( ! $item || 'nav_menu_item' !== $item->post_type ) {
+			throw new VR_Tool_Error( 'No menu item with ID ' . (int) $id . '.' );
+		}
+		return $item;
+	}
+
+	/**
+	 * Full menu item data in the shape wp_update_nav_menu_item() takes.
+	 *
+	 * @param WP_Post $item Item.
+	 * @return array{menu_id:int,data:array}
+	 */
+	protected static function menu_item_data( WP_Post $item ) {
+		$menus   = wp_get_object_terms( $item->ID, 'nav_menu', array( 'fields' => 'ids' ) );
+		$setup   = wp_setup_nav_menu_item( $item );
+		return array(
+			'menu_id' => is_wp_error( $menus ) || empty( $menus ) ? 0 : (int) $menus[0],
+			'data'    => array(
+				'menu-item-object-id'   => (int) $setup->object_id,
+				'menu-item-object'      => $setup->object,
+				'menu-item-parent-id'   => (int) $setup->menu_item_parent,
+				'menu-item-position'    => (int) $setup->menu_order,
+				'menu-item-type'        => $setup->type,
+				'menu-item-title'       => $item->post_title,
+				'menu-item-url'         => $setup->url,
+				'menu-item-description' => $item->post_content,
+				'menu-item-attr-title'  => $item->post_excerpt,
+				'menu-item-target'      => $setup->target,
+				'menu-item-classes'     => implode( ' ', (array) $setup->classes ),
+				'menu-item-xfn'         => $setup->xfn,
+				'menu-item-status'      => 'publish',
+			),
+		);
+	}
+
+	protected static function tool_wp_update_menu_item( array $a ) {
+		$item  = self::menu_item( self::int( $a, 'item_id' ) );
+		$state = self::menu_item_data( $item );
+		if ( ! $state['menu_id'] ) {
+			throw new VR_Tool_Error( 'That item is not in a menu.' );
+		}
+		$data    = $state['data'];
+		$changed = array();
+		if ( array_key_exists( 'title', $a ) ) {
+			$data['menu-item-title'] = self::str( $a, 'title' );
+			$changed[]               = 'title';
+		}
+		if ( array_key_exists( 'url', $a ) ) {
+			if ( 'custom' !== $data['menu-item-type'] ) {
+				throw new VR_Tool_Error( 'Only custom links have their own URL; this item links to a ' . $data['menu-item-object'] . '.' );
+			}
+			$data['menu-item-url'] = esc_url_raw( self::str( $a, 'url' ) );
+			$changed[]             = 'url';
+		}
+		if ( array_key_exists( 'parent', $a ) ) {
+			$data['menu-item-parent-id'] = self::int( $a, 'parent' );
+			$changed[]                   = 'parent';
+		}
+		if ( array_key_exists( 'position', $a ) ) {
+			$data['menu-item-position'] = self::int( $a, 'position' );
+			$changed[]                  = 'position';
+		}
+		if ( empty( $changed ) ) {
+			throw new VR_Tool_Error( 'Nothing to update.' );
+		}
+		$res = wp_update_nav_menu_item( $state['menu_id'], $item->ID, wp_slash( $data ) );
+		if ( is_wp_error( $res ) ) {
+			throw new VR_Tool_Error( $res->get_error_message() );
+		}
+		$change = VR_Changes::record( 'wp_update_menu_item', 'menu_item', $item->ID, sprintf( 'Updated menu item "%s" (%s)', $state['data']['menu-item-title'], implode( ', ', $changed ) ), $state );
+		return array(
+			'item_id'   => $item->ID,
+			'updated'   => $changed,
+			'change_id' => $change,
+		);
+	}
+
+	protected static function tool_wp_delete_menu_item( array $a ) {
+		$item  = self::menu_item( self::int( $a, 'item_id' ) );
+		$state = self::menu_item_data( $item );
+		$label = '' !== $item->post_title ? $item->post_title : ( get_the_title( (int) $state['data']['menu-item-object-id'] ) );
+		if ( ! wp_delete_post( $item->ID, true ) ) {
+			throw new VR_Tool_Error( 'Could not remove the menu item.' );
+		}
+		$change = VR_Changes::record( 'wp_delete_menu_item', 'menu_item_delete', $item->ID, sprintf( 'Removed menu item "%s"', $label ), $state );
+		return array(
+			'removed'   => $item->ID,
+			'change_id' => $change,
+		);
+	}
+
+	protected static function tool_wp_get_file( array $a ) {
+		$path = '';
+		if ( ! current_user_can( 'upload_files' ) ) {
+			throw new VR_Tool_Error( 'Not allowed.' );
+		}
+		if ( isset( $a['id'] ) ) {
+			$att = get_post( self::int( $a, 'id' ) );
+			if ( ! $att || 'attachment' !== $att->post_type ) {
+				throw new VR_Tool_Error( 'No attachment with that ID.' );
+			}
+			$path = (string) get_attached_file( $att->ID );
+		} elseif ( '' !== self::str( $a, 'url' ) ) {
+			$uploads = wp_get_upload_dir();
+			$url     = strtok( self::str( $a, 'url' ), '?' );
+			$base    = set_url_scheme( $uploads['baseurl'], 'https' );
+			$url     = set_url_scheme( $url, 'https' );
+			if ( 0 !== strpos( $url, trailingslashit( $base ) ) ) {
+				throw new VR_Tool_Error( 'URL must be inside this site\'s uploads folder.' );
+			}
+			$path = $uploads['basedir'] . '/' . rawurldecode( substr( $url, strlen( trailingslashit( $base ) ) ) );
+		} else {
+			throw new VR_Tool_Error( 'Pass id or url.' );
+		}
+		$real = realpath( $path );
+		// The root is fixed, not taken from the (changeable) upload_path option.
+		$root = realpath( defined( 'UPLOADS' ) ? ABSPATH . UPLOADS : WP_CONTENT_DIR . '/uploads' );
+		if ( ! $real || ! $root || 0 !== strpos( $real, $root . DIRECTORY_SEPARATOR ) || ! is_file( $real ) ) {
+			throw new VR_Tool_Error( 'File not found.' );
+		}
+		$ext    = strtolower( pathinfo( $real, PATHINFO_EXTENSION ) );
+		$text   = array( 'svg', 'css', 'json', 'txt', 'csv', 'md' );
+		$binary = array( 'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'ico', 'pdf', 'woff', 'woff2', 'ttf', 'otf', 'mp4', 'webm', 'mov', 'mp3', 'wav' );
+		if ( ! in_array( $ext, $text, true ) && ! in_array( $ext, $binary, true ) ) {
+			throw new VR_Tool_Error( 'That file type cannot be read through the connector.' );
+		}
+		$size = (int) filesize( $real );
+		$out  = array(
+			'path' => substr( $real, strlen( $root ) ),
+			'size' => $size,
+			'type' => wp_check_filetype( $real )['type'],
+		);
+		if ( in_array( $ext, $text, true ) ) {
+			if ( $size > 500000 ) {
+				throw new VR_Tool_Error( 'Text file is over 500 KB.' );
+			}
+			$out['content'] = (string) file_get_contents( $real ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+			return $out;
+		}
+		if ( empty( $a['base64'] ) ) {
+			$out['hint'] = 'Binary file. Pass base64: true to receive it (2 MB max).';
+			return $out;
+		}
+		if ( $size > 2 * MB_IN_BYTES ) {
+			throw new VR_Tool_Error( 'File is over 2 MB.' );
+		}
+		$out['base64'] = base64_encode( (string) file_get_contents( $real ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		return $out;
+	}
+
 	/* ---------------------------------------------------------------------
 	 * Revisions
 	 * ------------------------------------------------------------------- */
@@ -1295,21 +1594,138 @@ class VR_Tools {
 	 * Options
 	 * ------------------------------------------------------------------- */
 
+	/**
+	 * Option names must be written exactly as stored: lowercase, no spaces.
+	 * MySQL compares option names case-insensitively and ignores trailing
+	 * spaces, so anything looser would slip past name checks.
+	 *
+	 * @param string $name Name.
+	 * @return bool
+	 */
+	public static function option_name_ok( $name ) {
+		return is_string( $name ) && (bool) preg_match( '/^[a-z0-9_\-]{1,191}$/', $name );
+	}
+
+	/**
+	 * Whether the connector may change this option.
+	 *
+	 * @param string $name Name.
+	 * @return bool
+	 */
+	public static function option_writable( $name ) {
+		if ( ! self::option_name_ok( $name ) || preg_match( self::SECRET_PATTERN, $name ) ) {
+			return false;
+		}
+		if ( in_array( $name, self::WRITABLE_OPTIONS, true ) ) {
+			return true;
+		}
+		foreach ( self::WRITABLE_PREFIXES as $prefix ) {
+			if ( 0 === strpos( $name, $prefix ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Blank out credential-looking keys inside an option value.
+	 *
+	 * @param mixed $v Value.
+	 * @return mixed
+	 */
+	protected static function redact( $v ) {
+		if ( is_object( $v ) ) {
+			return (object) self::redact( get_object_vars( $v ) );
+		}
+		if ( ! is_array( $v ) ) {
+			return $v;
+		}
+		foreach ( $v as $k => $item ) {
+			if ( is_string( $k ) && preg_match( self::SECRET_PATTERN, $k ) && '' !== $item && null !== $item && array() !== $item ) {
+				$v[ $k ] = '[hidden]';
+			} else {
+				$v[ $k ] = self::redact( $item );
+			}
+		}
+		return $v;
+	}
+
+	/**
+	 * Put the stored secret back wherever an incoming value still says "[hidden]".
+	 *
+	 * @param mixed $incoming Value being written.
+	 * @param mixed $stored   Current stored value.
+	 * @return mixed
+	 * @throws VR_Tool_Error When a "[hidden]" placeholder has no stored value to restore.
+	 */
+	protected static function unredact( $incoming, $stored ) {
+		if ( '[hidden]' === $incoming ) {
+			if ( null === $stored || is_array( $stored ) || is_object( $stored ) ) {
+				throw new VR_Tool_Error( 'The value contains "[hidden]" where there is no saved secret to keep. Remove that key or give a real value.' );
+			}
+			return $stored;
+		}
+		if ( is_array( $incoming ) ) {
+			$stored_arr = is_object( $stored ) ? get_object_vars( $stored ) : ( is_array( $stored ) ? $stored : array() );
+			foreach ( $incoming as $k => $item ) {
+				$incoming[ $k ] = self::unredact( $item, array_key_exists( $k, $stored_arr ) ? $stored_arr[ $k ] : null );
+			}
+		}
+		return $incoming;
+	}
+
 	protected static function tool_wp_get_option( array $a ) {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			throw new VR_Tool_Error( 'Not allowed.' );
 		}
 		$name = self::str( $a, 'name' );
-		if ( in_array( $name, self::SECRET_OPTIONS, true ) ) {
-			throw new VR_Tool_Error( 'That option cannot be read here.' );
+		if ( ! self::option_name_ok( $name ) ) {
+			throw new VR_Tool_Error( 'Option names are lowercase letters, numbers, _ and - only.' );
+		}
+		if ( 0 === strpos( $name, 'vr_' ) || preg_match( self::SECRET_PATTERN, $name ) ) {
+			throw new VR_Tool_Error( 'That option holds credentials and cannot be read here.' );
 		}
 		$sentinel = '__vr_missing__';
 		$value    = get_option( $name, $sentinel );
-		return array(
+		if ( $sentinel === $value ) {
+			return array(
+				'name'   => $name,
+				'exists' => false,
+				'value'  => null,
+			);
+		}
+		if ( is_string( $value ) && '' !== $value && ( '{' === $value[0] || '[' === $value[0] ) ) {
+			$decoded = json_decode( wp_unslash( $value ), true );
+			if ( is_array( $decoded ) ) {
+				$value = $decoded;
+			}
+		}
+		$value = self::redact( $value );
+		$path  = self::str( $a, 'key' );
+		if ( '' !== $path ) {
+			foreach ( explode( '.', $path ) as $seg ) {
+				if ( ! is_array( $value ) || ! array_key_exists( $seg, $value ) ) {
+					throw new VR_Tool_Error( 'Key not found: ' . $path );
+				}
+				$value = $value[ $seg ];
+			}
+		}
+		$out  = array(
 			'name'   => $name,
-			'exists' => $sentinel !== $value,
-			'value'  => $sentinel === $value ? null : $value,
+			'exists' => true,
 		);
+		if ( '' !== $path ) {
+			$out['key'] = $path;
+		}
+		$size = strlen( (string) wp_json_encode( $value ) );
+		if ( is_array( $value ) && $size > 20000 ) {
+			$out['too_large'] = $size;
+			$out['keys']      = array_slice( array_keys( $value ), 0, 400 );
+			$out['hint']      = 'Pass key to read one part.';
+			return $out;
+		}
+		$out['value'] = $value;
+		return $out;
 	}
 
 	protected static function tool_wp_update_option( array $a ) {
@@ -1317,12 +1733,17 @@ class VR_Tools {
 			throw new VR_Tool_Error( 'Not allowed.' );
 		}
 		$name = self::str( $a, 'name' );
-		if ( '' === $name || in_array( $name, self::PROTECTED_OPTIONS, true ) || 0 === strpos( $name, 'vr_' ) ) {
-			throw new VR_Tool_Error( 'That option is protected and cannot be changed here.' );
+		if ( ! self::option_writable( $name ) ) {
+			throw new VR_Tool_Error( 'That option cannot be changed through the connector. Allowed: site title, tagline, homepage and reading settings, image sizes, widgets, theme mods, Avada (fusion_*, avada_*) and Rank Math (rank-math-options-*) settings.' );
 		}
 		$sentinel = '__vr_missing__';
 		$before   = get_option( $name, $sentinel );
-		update_option( $name, $a['value'] );
+		$stored_value = $sentinel === $before ? null : $before;
+		if ( is_string( $stored_value ) && '' !== $stored_value && ( '{' === $stored_value[0] || '[' === $stored_value[0] ) && is_array( $a['value'] ) ) {
+			$decoded      = json_decode( wp_unslash( $stored_value ), true );
+			$stored_value = is_array( $decoded ) ? $decoded : $stored_value;
+		}
+		update_option( $name, self::unredact( $a['value'], $stored_value ) );
 		$change = VR_Changes::record(
 			'wp_update_option',
 			'option',
@@ -1345,62 +1766,18 @@ class VR_Tools {
 	 * ------------------------------------------------------------------- */
 
 	protected static function tool_vr_purge_cache( array $a ) {
-		$id         = self::int( $a, 'id' );
-		$everything = ! $id || ! empty( $a['everything'] );
-		$url        = $id ? get_permalink( $id ) : '';
-		$done       = array();
-
-		if ( $everything && function_exists( 'rocket_clean_domain' ) ) {
-			rocket_clean_domain();
-			$done['wp_rocket'] = 'site';
-		} elseif ( $id && function_exists( 'rocket_clean_post' ) ) {
-			rocket_clean_post( $id );
-			$done['wp_rocket'] = 'page';
+		$id = self::int( $a, 'id' );
+		if ( $id && ! get_post( $id ) ) {
+			throw new VR_Tool_Error( 'No post with ID ' . $id . '.' );
 		}
-
-		global $kinsta_cache;
-		if ( is_object( $kinsta_cache ) && isset( $kinsta_cache->kinsta_cache_purge ) ) {
-			$purge = $kinsta_cache->kinsta_cache_purge;
-			if ( $everything && method_exists( $purge, 'purge_complete_caches' ) ) {
-				$purge->purge_complete_caches();
-				$done['kinsta'] = 'site';
-			} elseif ( $id && method_exists( $purge, 'initiate_purge' ) ) {
-				$purge->initiate_purge( $id );
-				$done['kinsta'] = 'page';
-			}
+		if ( $id && ! current_user_can( 'edit_post', $id ) ) {
+			throw new VR_Tool_Error( 'Not allowed.' );
 		}
-
-		if ( function_exists( 'sg_cachepress_purge_cache' ) ) {
-			sg_cachepress_purge_cache( $everything ? null : $url );
-			$done['siteground'] = $everything ? 'site' : 'page';
+		$site = ! $id || ! empty( $a['everything'] ) || in_array( get_post_type( $id ), VR_Cache::GLOBAL_TYPES, true );
+		if ( $site && ! current_user_can( 'manage_options' ) ) {
+			throw new VR_Tool_Error( 'Only administrators can clear the whole site cache.' );
 		}
-
-		$zone  = (string) VR_Settings::get( 'cloudflare_zone_id' );
-		$token = (string) VR_Settings::get( 'cloudflare_token' );
-		if ( '' !== $zone && '' !== $token ) {
-			$body = $everything ? array( 'purge_everything' => true ) : array( 'files' => array( $url, trailingslashit( $url ) ) );
-			$res  = wp_remote_post(
-				'https://api.cloudflare.com/client/v4/zones/' . rawurlencode( $zone ) . '/purge_cache',
-				array(
-					'timeout' => 15,
-					'headers' => array(
-						'Authorization' => 'Bearer ' . $token,
-						'Content-Type'  => 'application/json',
-					),
-					'body'    => wp_json_encode( $body ),
-				)
-			);
-			$ok                 = ! is_wp_error( $res ) && 200 === (int) wp_remote_retrieve_response_code( $res );
-			$done['cloudflare'] = $ok ? ( $everything ? 'site' : 'page' ) : 'failed: ' . ( is_wp_error( $res ) ? $res->get_error_message() : wp_remote_retrieve_body( $res ) );
-		} else {
-			$done['cloudflare'] = 'not configured';
-		}
-
-		return array(
-			'scope'  => $everything ? 'site' : 'page',
-			'url'    => $url,
-			'purged' => $done,
-		);
+		return VR_Cache::purge( $id, ! empty( $a['everything'] ) );
 	}
 
 	/* ---------------------------------------------------------------------

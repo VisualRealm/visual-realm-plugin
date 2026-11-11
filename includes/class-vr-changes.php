@@ -99,10 +99,12 @@ class VR_Changes {
 		global $wpdb;
 		$limit = max( 1, min( 100, (int) $limit ) );
 		$t     = VR_DB::table( 'changes' );
+		// Non-administrators only see their own changes.
+		$mine = current_user_can( 'manage_options' ) ? '' : $wpdb->prepare( ' AND user_id = %d', get_current_user_id() );
 		if ( '' !== (string) $object_id ) {
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, created_at, user_id, tool, object_type, object_id, summary, undoable, undone FROM {$t} WHERE object_id = %s ORDER BY id DESC LIMIT %d", (string) $object_id, $limit ), ARRAY_A );
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, created_at, user_id, tool, object_type, object_id, summary, undoable, undone FROM {$t} WHERE object_id = %s{$mine} ORDER BY id DESC LIMIT %d", (string) $object_id, $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB
 		} else {
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, created_at, user_id, tool, object_type, object_id, summary, undoable, undone FROM {$t} ORDER BY id DESC LIMIT %d", $limit ), ARRAY_A );
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, created_at, user_id, tool, object_type, object_id, summary, undoable, undone FROM {$t} WHERE 1=1{$mine} ORDER BY id DESC LIMIT %d", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB
 		}
 		foreach ( $rows as &$r ) {
 			$u              = get_userdata( (int) $r['user_id'] );
@@ -128,6 +130,9 @@ class VR_Changes {
 		if ( ! $row ) {
 			return new WP_Error( 'not_found', 'No change with that ID.' );
 		}
+		if ( (int) $row['user_id'] !== get_current_user_id() && ! current_user_can( 'manage_options' ) ) {
+			return new WP_Error( 'forbidden', 'You can only undo your own changes.' );
+		}
 		if ( ! (int) $row['undoable'] ) {
 			return new WP_Error( 'not_undoable', 'That change cannot be undone.' );
 		}
@@ -147,20 +152,42 @@ class VR_Changes {
 				$result = self::undo_create( (int) $snap['post_id'] );
 				break;
 			case 'post_trash':
+				if ( ! current_user_can( 'delete_post', (int) $snap['post_id'] ) ) {
+					return new WP_Error( 'forbidden', 'Not allowed.' );
+				}
 				add_filter( 'wp_untrash_post_status', 'wp_untrash_post_set_previous_status', 10, 3 );
 				$result = wp_untrash_post( (int) $snap['post_id'] ) ? true : new WP_Error( 'failed', 'Could not restore from trash.' );
 				break;
 			case 'option':
-				if ( ! current_user_can( 'manage_options' ) ) {
+				if ( ! current_user_can( 'manage_options' ) || ! VR_Tools::option_writable( (string) $snap['name'] ) ) {
 					return new WP_Error( 'forbidden', 'Not allowed.' );
 				}
 				$result = $snap['existed'] ? update_option( $snap['name'], $snap['value'] ) || true : delete_option( $snap['name'] ) || true;
 				break;
 			case 'terms':
+				if ( ! current_user_can( 'edit_post', (int) $snap['post_id'] ) ) {
+					return new WP_Error( 'forbidden', 'Not allowed.' );
+				}
 				$result = wp_set_object_terms( (int) $snap['post_id'], array_map( 'intval', (array) $snap['term_ids'] ), $snap['taxonomy'], false );
 				$result = is_wp_error( $result ) ? $result : true;
 				break;
+			case 'menu_item':
+			case 'menu_item_delete':
+				if ( ! current_user_can( 'edit_theme_options' ) ) {
+					return new WP_Error( 'forbidden', 'Not allowed.' );
+				}
+				$item_id = 'menu_item' === $row['object_type'] ? (int) $row['object_id'] : 0;
+				if ( $item_id && ! get_post( $item_id ) ) {
+					return new WP_Error( 'missing', 'That menu item no longer exists.' );
+				}
+				$res    = wp_update_nav_menu_item( (int) $snap['menu_id'], $item_id, wp_slash( $snap['data'] ) );
+				$result = is_wp_error( $res ) ? $res : true;
+				break;
 			case 'term_create':
+				$tax_obj = get_taxonomy( $snap['taxonomy'] );
+				if ( ! $tax_obj || ! current_user_can( $tax_obj->cap->delete_terms ) ) {
+					return new WP_Error( 'forbidden', 'Not allowed.' );
+				}
 				$result = wp_delete_term( (int) $snap['term_id'], $snap['taxonomy'] );
 				$result = is_wp_error( $result ) ? $result : true;
 				break;
