@@ -1,6 +1,6 @@
 <?php
 /**
- * Settings → Visual Realm admin screen.
+ * Visual Realm admin screen (top-level menu).
  *
  * @package VisualRealm
  */
@@ -26,7 +26,42 @@ class VR_Admin {
 	 * Add the settings page.
 	 */
 	public static function menu() {
-		add_options_page( 'Visual Realm', 'Visual Realm', 'manage_options', self::SLUG, array( __CLASS__, 'render' ) );
+		add_menu_page( 'Visual Realm', 'Visual Realm', 'manage_options', self::SLUG, array( __CLASS__, 'render' ), self::menu_icon(), 3 );
+	}
+
+	/**
+	 * Admin URL of the plugin page.
+	 *
+	 * @return string
+	 */
+	public static function page_url() {
+		return admin_url( 'admin.php?page=' . self::SLUG );
+	}
+
+	/**
+	 * Menu icon: the bundled logo as a data URI so WordPress tints it to the admin color scheme.
+	 *
+	 * @return string
+	 */
+	protected static function menu_icon() {
+		$file = VR_PLUGIN_DIR . 'assets/menu-icon.svg';
+		if ( is_readable( $file ) ) {
+			return 'data:image/svg+xml;base64,' . base64_encode( (string) file_get_contents( $file ) ); // phpcs:ignore
+		}
+		return 'dashicons-visibility';
+	}
+
+	/**
+	 * Full-color logo for the page header, if bundled.
+	 *
+	 * @return string
+	 */
+	protected static function header_logo() {
+		$file = VR_PLUGIN_DIR . 'assets/logo.svg';
+		if ( ! is_readable( $file ) ) {
+			return '';
+		}
+		return '<img src="' . esc_url( plugins_url( 'assets/logo.svg', VR_PLUGIN_FILE ) ) . '" alt="Visual Realm" style="height:36px;width:auto;vertical-align:middle;margin-right:12px">';
 	}
 
 	/**
@@ -36,7 +71,7 @@ class VR_Admin {
 	 * @return array
 	 */
 	public static function action_links( $links ) {
-		array_unshift( $links, '<a href="' . esc_url( admin_url( 'options-general.php?page=' . self::SLUG ) ) . '">' . esc_html__( 'Settings', 'visual-realm' ) . '</a>' );
+		array_unshift( $links, '<a href="' . esc_url( self::page_url() ) . '">' . esc_html__( 'Settings', 'visual-realm' ) . '</a>' );
 		return $links;
 	}
 
@@ -46,7 +81,7 @@ class VR_Admin {
 	 * @param string $msg Notice key.
 	 */
 	protected static function back( $msg ) {
-		wp_safe_redirect( add_query_arg( 'vr_msg', $msg, admin_url( 'options-general.php?page=' . self::SLUG ) ) );
+		wp_safe_redirect( add_query_arg( 'vr_msg', $msg, self::page_url() ) );
 		exit;
 	}
 
@@ -160,7 +195,7 @@ class VR_Admin {
 		);
 		?>
 		<div class="wrap">
-			<h1>Visual Realm</h1>
+			<h1><?php echo self::header_logo(); // phpcs:ignore WordPress.Security.EscapeOutput -- escaped in header_logo(). ?>Visual Realm</h1>
 			<?php if ( isset( $notices[ $msg ] ) ) : ?>
 				<div class="notice notice-<?php echo esc_attr( $notices[ $msg ][0] ); ?> is-dismissible"><p><?php echo esc_html( $notices[ $msg ][1] ); ?></p></div>
 			<?php endif; ?>

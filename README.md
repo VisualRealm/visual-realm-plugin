@@ -12,7 +12,7 @@ Connector that lets Visual Realm build and manage a client site through Claude. 
   - Token revocation.
   - Discovery at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`.
 - **Consent screen**: Only users with the chosen capability can connect (Administrators by default). Apps may only return to allowed hosts (claude.ai, claude.com, localhost by default).
-- **Change log with undo**: Every write is snapshotted. Undo from the tool or from Settings → Visual Realm. Snapshots hold only the fields a change touched, so undoing an old edit never reverts a later publish.
+- **Change log with undo**: Every write is snapshotted. Undo from the tool or from the Visual Realm menu in WordPress admin. Snapshots hold only the fields a change touched, so undoing an old edit never reverts a later publish.
 - **Uninstall**: Deleting the plugin drops all tokens and tables, which ends every connection.
 
 ## Tools
@@ -33,7 +33,7 @@ Connector that lets Visual Realm build and manage a client site through Claude. 
 ## Install on a client site
 
 1. Upload `visual-realm.zip` under Plugins → Add New → Upload, then activate.
-2. Settings → Visual Realm: copy the Connection URL.
+2. Open **Visual Realm** in the WordPress admin sidebar and copy the Connection URL.
 3. claude.ai → Organization settings → Connectors → Add → Custom. Paste the URL and leave OAuth fields blank.
 4. Connect, sign in to WordPress, then click **Allow**.
 5. Optional: add a Cloudflare zone ID and an API token scoped to Zone → Cache Purge.
@@ -41,5 +41,10 @@ Connector that lets Visual Realm build and manage a client site through Claude. 
 ## Requirements
 
 - WordPress 6.0+ and PHP 7.4+.
-- Root installs only. A subdirectory install can't serve `/.well-known/` at the domain root.
+- Works on hosts that block the root `/.well-known/` folder (SiteGround). Discovery is also served at the issuer path and through `?rest_route=`.
+
+## Branding
+
+- `assets/menu-icon.svg` is the admin sidebar icon, a single-color SVG that WordPress tints to the admin color scheme.
+- `assets/logo.svg` is the full-color logo shown in the page header.
 - Bot protection (Cloudflare WAF, Kinsta) must let `/vr-oauth/*`, `/.well-known/oauth-*` and `/wp-json/visual-realm/*` through.

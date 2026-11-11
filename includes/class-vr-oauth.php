@@ -569,7 +569,7 @@ class VR_OAuth {
 		$body  = '<h1>' . esc_html( sprintf( /* translators: 1: app, 2: site */ __( 'Allow %1$s to manage %2$s?', 'visual-realm' ), $app, $site ) ) . '</h1>';
 		$body .= '<p>' . esc_html__( 'It will act with your account\'s permissions on this site, including:', 'visual-realm' ) . '</p>';
 		$body .= '<ul><li>' . esc_html__( 'Reading and editing pages, posts and their SEO settings', 'visual-realm' ) . '</li><li>' . esc_html__( 'Uploading and updating media', 'visual-realm' ) . '</li><li>' . esc_html__( 'Changing site options and clearing caches', 'visual-realm' ) . '</li></ul>';
-		$body .= '<p>' . esc_html__( 'Every change is logged and can be undone. You can disconnect any time under Settings → Visual Realm.', 'visual-realm' ) . '</p>';
+		$body .= '<p>' . esc_html__( 'Every change is logged and can be undone. You can disconnect any time under the Visual Realm menu in WordPress admin.', 'visual-realm' ) . '</p>';
 		$body .= '<div class="meta">' . esc_html( sprintf( /* translators: 1: user, 2: host */ __( 'Signed in as %1$s · returns to %2$s', 'visual-realm' ), $user->user_login, $host ) ) . '</div>';
 		$body .= '<form method="post" action="' . esc_url( home_url( '/vr-oauth/authorize' ) ) . '">' . $fields;
 		$body .= '<div class="row"><button type="submit" name="decision" value="deny">' . esc_html__( 'Cancel', 'visual-realm' ) . '</button><button class="primary" type="submit" name="decision" value="approve">' . esc_html__( 'Allow', 'visual-realm' ) . '</button></div></form>';
