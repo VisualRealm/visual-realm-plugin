@@ -34,7 +34,7 @@ r = requests.get(BASE + "/?rest_route=/visual-realm/v1/.well-known/oauth-protect
 check("discovery metadata still public", r.status_code == 200, r.status_code)
 log = json.loads(php("echo wp_json_encode(VR_Access::blocked_log());") or "[]")
 check("refused requests logged with address and endpoint",
-      len(log) == 1 and log[0]["where"] == "mcp" and log[0]["ip"] == "127.0.0.1", log)
+      len(log) == 1 and log[0]["where"] == "mcp" and log[0]["ip"] in ("127.0.0.1", "::1"), log)
 n_before = len(log)
 requests.post(MCP, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
 check("repeat refusals are not re-logged (no DB churn under attack)", len(json.loads(php("echo wp_json_encode(VR_Access::blocked_log());"))) == n_before, "")
@@ -81,7 +81,7 @@ mails = [c for c in calls() if c.startswith("mail:")]
 check("connection alert emailed to every named account",
       len(mails) == 1 and "admin2@example.com" in mails[0] and "kyle@example.com" in mails[0], mails)
 check("alert names account, app and address",
-      mails and "Account: admin2" in mails[0] and "App: Claude" in mails[0] and "127.0.0.1" in mails[0] and "page=visual-realm" in mails[0], mails)
+      mails and "Account: admin2" in mails[0] and "App: Claude" in mails[0] and ("127.0.0.1" in mails[0] or "address: ::1" in mails[0]) and "page=visual-realm" in mails[0], mails)
 AT2, RT2 = tok2.json()["access_token"], tok2.json()["refresh_token"]
 check("second account's token works", not tool(AT2, "mcp_ping")[0])
 
