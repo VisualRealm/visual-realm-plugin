@@ -104,11 +104,11 @@ class VR_DB {
 		global $wpdb;
 		$wpdb->query( $wpdb->prepare( 'DELETE FROM ' . self::table( 'tokens' ) . ' WHERE expires_at < %s', self::now( -DAY_IN_SECONDS ) ) );
 		$wpdb->query( $wpdb->prepare( 'DELETE FROM ' . self::table( 'changes' ) . ' WHERE created_at < %s', self::now( -90 * DAY_IN_SECONDS ) ) );
-		// Registered clients that never received a token within 30 days.
+		// Registered clients that never received a token within a day.
 		$wpdb->query(
 			$wpdb->prepare(
 				'DELETE FROM ' . self::table( 'clients' ) . ' WHERE created_at < %s AND client_id NOT IN ( SELECT client_id FROM ' . self::table( 'tokens' ) . ' )',
-				self::now( -30 * DAY_IN_SECONDS )
+				self::now( -DAY_IN_SECONDS )
 			)
 		);
 	}

@@ -34,7 +34,7 @@ r = requests.get(BASE + "/?rest_route=/visual-realm/v1/.well-known/oauth-protect
 check("discovery metadata still public", r.status_code == 200, r.status_code)
 log = json.loads(php("echo wp_json_encode(VR_Access::blocked_log());") or "[]")
 check("refused requests logged with address and endpoint",
-      {"mcp", "token", "register"} <= {e["where"] for e in log} and all(e["ip"] == "127.0.0.1" for e in log), log)
+      len(log) == 1 and log[0]["where"] == "mcp" and log[0]["ip"] == "127.0.0.1", log)
 n_before = len(log)
 requests.post(MCP, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
 check("repeat refusals are not re-logged (no DB churn under attack)", len(json.loads(php("echo wp_json_encode(VR_Access::blocked_log());"))) == n_before, "")
@@ -187,9 +187,12 @@ nonce = re.search(r'name="_wpnonce" value="([^"]+)"[^>]*>\s*<input type="hidden"
 nonce = nonce.group(1) if nonce else ""
 form = [("_wpnonce", nonce), ("action", "vr_save_settings"), ("capability", "manage_options"), ("redirect_uris", REDIRECT),
         ("allow_loopback", "1"), ("restrict_ips", "1"), ("extra_ips", "127.0.0.1\n::1\n10.0.0.0/8"), ("extra_post_types", "secret_cpt"),
-        ("allowed_users[]", "1"), ("allowed_users[]", "999999")]
+        ("shown_users[]", "1"), ("allowed_users[]", "1"), ("allowed_users[]", "999999")]
 form += [("tools[]", t) for t in all_tools if t != "wp_upload_media"]
+reset_calls()
 d = admin.post(BASE + "/wp-admin/admin-post.php", data=form, allow_redirects=False)
+mails = [c for c in calls() if c.startswith("mail:")]
+check("security settings change emails the named accounts", any("security settings changed" in m and "Switched-off tools" in m and "Extra content types" in m for m in mails), mails)
 check("settings save", d.status_code == 302 and "vr_msg=saved" in d.headers.get("Location", ""), (d.status_code, d.headers.get("Location")))
 s = json.loads(php("echo wp_json_encode(VR_Settings::get());"))
 check("saved: tool switched off", s["disabled_tools"] == ["wp_upload_media"], s["disabled_tools"])
@@ -199,18 +202,104 @@ check("saved: extra content type", s["extra_post_types"] == "secret_cpt", s["ext
 form = [(k, v) for k, v in form if k != "restrict_ips"]
 admin.post(BASE + "/wp-admin/admin-post.php", data=form, allow_redirects=False)
 check("restriction checkbox can be cleared", php("echo (int) VR_Settings::get('restrict_ips');") == "0")
-settings(restrict_ips=1, extra_ips=LOCAL, disabled_tools=[], extra_post_types="", allowed_users=[1])
+settings(restrict_ips=1, extra_ips=LOCAL, disabled_tools=[], extra_post_types="", allowed_users=[1], allow_loopback=1)
+
+
+# ---------------------------------------------------------------- review regressions
+# Files: attachments cannot be pointed at arbitrary files
+err, o = tool(AT, "wp_create_post", {"post_type": "attachment", "title": "x", "meta": {"_wp_attached_file": "fusion-forms/7/loan-app.txt"}})
+check("attachments cannot be created outside uploads", err, o)
+err, o = tool(AT, "wp_create_post", {"post_type": "page", "title": "x", "meta": {"_wp_attached_file": "fusion-forms/7/loan-app.txt"}})
+check("protected meta refused on create", err, o)
+err, img2 = tool(AT, "wp_upload_media", {"data": png, "filename": "repoint-test.png"})
+for k in ["_wp_attached_file", "_wp_attachment_metadata", "_menu_item_object_id", "_thumbnail_id"]:
+    err, o = tool(AT, "wp_update_post_meta", {"id": img2["id"], "key": k, "value": "fusion-forms/7/loan-app.txt"})
+    check("protected meta write refused: " + k, err, o)
+    err, o = tool(AT, "wp_delete_post_meta", {"id": img2["id"], "key": k})
+    check("protected meta delete refused: " + k, err, o)
+for d_, fname in [("fusion-forms/7", "loan-app.txt"), ("wpallexport/exports", "orders.csv"), ("woocommerce_uploads", "file.pdf")]:
+    os.makedirs(f"{up}/{d_}", exist_ok=True)
+    open(f"{up}/{d_}/{fname}", "w").write("SSN 123-45-6789")
+    aid = int(php("echo wp_insert_attachment(array('post_title'=>'p','post_mime_type'=>'text/plain','post_status'=>'inherit'), '%s/%s/%s');" % (up, d_, fname)))
+    err, f = tool(AT, "wp_get_file", {"id": aid})
+    check(f"plugin folder refused even with an attachment row: {d_}", err and "123-45-6789" not in str(f), f)
+    err, f = tool(AT, "wp_get_rendered", {"url": f"{BASE}/wp-content/uploads/{d_}/{fname}"})
+    check(f"rendered fetch refuses uploads: {d_}", err and "123-45-6789" not in str(f), f)
+for u in [BASE + "/wp-content/debug.log", BASE + "/wp-json/wp/v2/users", BASE + "/?rest_route=/wp/v2/users", BASE + "/wp-admin/",
+          BASE + "/wp-content/uploads/2026/11/loose-notes.txt", BASE + "/backup.sql", BASE + "/%77p-content/debug.log"]:
+    err, f = tool(AT, "wp_get_rendered", {"url": u})
+    check("rendered fetch refuses " + u.replace(BASE, ""), err, f)
+err, f = tool(AT, "wp_get_rendered", {"url": BASE + "/robots.txt"})
+check("rendered fetch allows robots.txt", not err, f)
+err, f = tool(AT, "wp_get_rendered", {"url": BASE + "/"})
+check("rendered fetch allows pages", not err, f)
+
+# undo cannot delete files outside the media library, nor bypass switches
+err, img3 = tool(AT, "wp_upload_media", {"data": png, "filename": "undo-guard.png"})
+settings(disabled_tools=["wp_upload_media"])
+err, o = tool(AT, "mcp_undo_change", {"id": img3["change_id"]})
+check("undo refused while the original tool is switched off", err and "switched off" in str(o), o)
+settings(disabled_tools=[])
+open(f"{up}/gravity_forms/.htaccess", "w").write("deny from all")
+php("update_post_meta(%d,'_wp_attached_file','gravity_forms/.htaccess');" % img3["id"])
+err, o = tool(AT, "mcp_undo_change", {"id": img3["change_id"]})
+check("undo will not delete a file outside the media library", err and os.path.exists(f"{up}/gravity_forms/.htaccess"), o)
+
+# menus and parents do not reveal walled posts
+item = int(php("$m=wp_get_nav_menu_object('Wall Menu');echo wp_update_nav_menu_item($m->term_id,0,array('menu-item-type'=>'post_type','menu-item-object'=>'shop_order','menu-item-object-id'=>%d,'menu-item-status'=>'publish'));" % order))
+err, menus = tool(AT, "wp_get_menus")
+check("menu items pointing at walled posts are hidden", not err and "Order 1001" not in json.dumps(menus) and "hidden" in json.dumps(menus), menus)
+pg2 = int(php("echo wp_insert_post(array('post_type'=>'page','post_title'=>'Child','post_status'=>'draft'));"))
+err, o = tool(AT, "wp_update_post", {"id": pg2, "parent": order})
+check("walled post cannot become a parent", err, o)
+
+# form data in transients and other option names
+php("set_transient('wpforms_entry_cache_1','SSN 123-45-6789');set_transient('gform_entries_cache','SSN 123-45-6789');update_option('fusion_form_submissions_cache','SSN');update_option('fusion_options',array('primary_color'=>'#fff'));")
+for nm in ["_transient_wpforms_entry_cache_1", "_transient_gform_entries_cache", "_site_transient_update_plugins", "cron", "fusion_form_submissions_cache"]:
+    err, o = tool(AT, "wp_get_option", {"name": nm})
+    check("option unreadable: " + nm, err and "123-45-6789" not in str(o), o)
+err, o = tool(AT, "wp_get_option", {"name": "fusion_options"})
+check("Avada theme options still readable", not err, o)
+
+# blocked log cannot be used to fill the options table
+settings(extra_ips="")
+rows0 = php("global $wpdb;echo $wpdb->get_var(\"SELECT COUNT(*) FROM {$wpdb->options}\");")
+for i in range(15):
+    requests.post(f"{BASE}/vr-oauth/x{i}")
+    requests.post(MCP, json={})
+rows1 = php("global $wpdb;echo $wpdb->get_var(\"SELECT COUNT(*) FROM {$wpdb->options}\");")
+check("unknown OAuth paths are 404s and refusals add no option rows", requests.post(BASE + "/vr-oauth/x99").status_code == 404 and int(rows1) - int(rows0) <= 2, (rows0, rows1))
+settings(extra_ips=LOCAL)
+
+# revocation is bound to the client that owns the token
+other = register().json()["client_id"]
+requests.post(BASE + "/vr-oauth/revoke", data={"token": AT, "client_id": other})
+check("another client cannot revoke someone else's token", not tool(AT, "mcp_ping")[0])
+
+# settings save keeps named accounts that were not on screen
+php("wp_set_current_user(1);VR_Access::set_allowed_users(array(1,%d));" % uid2)
+pg = admin.get(BASE + "/wp-admin/admin.php?page=visual-realm")
+nonce = re.search(r'name="_wpnonce" value="([^"]+)"[^>]*>\s*<input type="hidden" name="_wp_http_referer"[^>]*>\s*<input type="hidden" name="action" value="vr_save_settings"', pg.text).group(1)
+base_form = [("_wpnonce", nonce), ("action", "vr_save_settings"), ("capability", "manage_options"), ("redirect_uris", REDIRECT),
+             ("restrict_ips", "1"), ("extra_ips", LOCAL), ("shown_users[]", "1"), ("allowed_users[]", "1")] + [("tools[]", t) for t in all_tools]
+admin.post(BASE + "/wp-admin/admin-post.php", data=base_form, allow_redirects=False)
+check("accounts not shown on the form stay named", sorted(json.loads(php("echo wp_json_encode(VR_Access::allowed_users());"))) == sorted([1, uid2]))
+php("wp_set_current_user(1);VR_Access::set_allowed_users(array(1));")
+settings(allow_loopback=1)
 
 # ---------------------------------------------------------------- token lifetime and migration
 exp = php("global $wpdb;echo strtotime($wpdb->get_var($wpdb->prepare(\"SELECT expires_at FROM {$wpdb->prefix}vr_tokens WHERE token_hash=%s\", hash('sha256','" + RT + "'))).' UTC')-time();")
 check("refresh tokens last 30 days", 29 * 86400 < int(exp) <= 30 * 86400, exp)
-php("global $wpdb;$wpdb->insert($wpdb->prefix.'vr_tokens',array('token_hash'=>hash('sha256','legacy'),'token_type'=>'refresh','family'=>str_repeat('a',32),'client_id'=>'legacy','user_id'=>%d,'scope'=>'mcp','resource'=>'','expires_at'=>gmdate('Y-m-d H:i:s',time()+90*86400),'created_at'=>gmdate('Y-m-d H:i:s')));"
+reset_calls()
+php("global $wpdb;$wpdb->query(\"UPDATE {$wpdb->prefix}vr_tokens SET revoked=1\");$wpdb->insert($wpdb->prefix.'vr_tokens',array('token_hash'=>hash('sha256','legacy'),'token_type'=>'refresh','family'=>str_repeat('a',32),'client_id'=>'legacy','user_id'=>%d,'scope'=>'mcp','resource'=>'','expires_at'=>gmdate('Y-m-d H:i:s',time()+90*86400),'created_at'=>gmdate('Y-m-d H:i:s')));"
     "$s=(array)get_option('vr_settings');$s['allowed_users']=array();$s['refresh_ttl']=90*86400;update_option('vr_settings',$s,false);update_option('vr_access_rev',2,false);" % uid2)
-requests.get(BASE + "/")
+admin.get(BASE + "/")
 mig = json.loads(php("global $wpdb;echo wp_json_encode(array('users'=>VR_Access::allowed_users(),'ttl'=>(int)VR_Settings::get('refresh_ttl'),'legacy'=>strtotime($wpdb->get_var(\"SELECT expires_at FROM {$wpdb->prefix}vr_tokens WHERE client_id='legacy'\").' UTC')-time(),'rev'=>(int)get_option('vr_access_rev')));"))
-check("upgrade names the accounts that were already connected", sorted(mig["users"]) == sorted([1, uid2]), mig)
+check("upgrade names only accounts that were already connected, not whoever browses", mig["users"] == [uid2], mig)
 check("upgrade shortens refresh lifetime to 30 days", mig["ttl"] == 30 * 86400 and mig["legacy"] <= 30 * 86400 + 60, mig)
 check("upgrade runs once", mig["rev"] == 3, mig)
+mails = [c for c in calls() if c.startswith("mail:")]
+check("upgrade emails the accounts it named", any("connection accounts named" in m and "admin2" in m for m in mails), mails)
 php("global $wpdb;$wpdb->delete($wpdb->prefix.'vr_tokens',array('client_id'=>'legacy'));wp_set_current_user(1);VR_Access::set_allowed_users(array(1));")
 
 finish()

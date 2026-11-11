@@ -306,7 +306,7 @@ shutil.rmtree(rel)
 # ---------------------------------------------------------------- disconnect mid-session
 fam = php("global $wpdb;echo $wpdb->get_var($wpdb->prepare(\"SELECT family FROM {$wpdb->prefix}vr_tokens WHERE token_hash=%s\",hash('sha256','" + AT + "')));").strip()
 page = admin.get(BASE + "/wp-admin/admin.php?page=visual-realm")
-nonce = re.search(r'name="_wpnonce" value="([^"]+)"[^>]*>\s*<input type="hidden" name="action" value="vr_revoke"', page.text)
+nonce = re.search(r'name="_wpnonce" value="([^"]+)"[^>]*>\s*(?:<input type="hidden" name="_wp_http_referer"[^>]*>\s*)?<input type="hidden" name="action" value="vr_revoke"', page.text)
 nonce = nonce.group(1) if nonce else re.findall(r'_wpnonce" value="([^"]+)"', page.text)[1]
 d = admin.post(BASE + "/wp-admin/admin-post.php", data={"_wpnonce": nonce, "action": "vr_revoke", "family": fam}, allow_redirects=False)
 check("Disconnect button works", d.status_code == 302 and "vr_msg=revoked" in d.headers.get("Location", ""), d.headers)

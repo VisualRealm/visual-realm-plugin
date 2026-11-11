@@ -123,6 +123,7 @@ class VR_Admin {
 		if ( ! empty( $_POST['update_clear'] ) ) {
 			$values['update_token'] = '';
 		}
+		$before                     = VR_Settings::get();
 		$values['restrict_ips']     = empty( $_POST['restrict_ips'] ) ? 0 : 1;
 		$values['extra_ips']        = implode( "\n", VR_Access::parse_ranges( isset( $_POST['extra_ips'] ) ? sanitize_textarea_field( wp_unslash( $_POST['extra_ips'] ) ) : '' ) );
 		$values['extra_post_types'] = implode( ', ', array_filter( array_map( 'sanitize_key', preg_split( '/[\s,]+/', isset( $_POST['extra_post_types'] ) ? sanitize_text_field( wp_unslash( $_POST['extra_post_types'] ) ) : '' ) ) ) );
@@ -131,9 +132,41 @@ class VR_Admin {
 		delete_transient( VR_Updater::TRANSIENT );
 		VR_Settings::save( $values );
 
-		$eligible = wp_list_pluck( VR_Access::eligible_users(), 'ID' );
-		$picked   = isset( $_POST['allowed_users'] ) && is_array( $_POST['allowed_users'] ) ? array_map( 'absint', wp_unslash( $_POST['allowed_users'] ) ) : array();
-		VR_Access::set_allowed_users( array_values( array_intersect( $picked, array_map( 'intval', $eligible ) ) ) );
+		$shown  = isset( $_POST['shown_users'] ) && is_array( $_POST['shown_users'] ) ? array_map( 'absint', wp_unslash( $_POST['shown_users'] ) ) : array();
+		$picked = isset( $_POST['allowed_users'] ) && is_array( $_POST['allowed_users'] ) ? array_map( 'absint', wp_unslash( $_POST['allowed_users'] ) ) : array();
+		$picked = array_intersect( $picked, $shown );
+		$picked = array_filter(
+			$picked,
+			function ( $id ) {
+				return user_can( $id, VR_Settings::get( 'capability' ) );
+			}
+		);
+		// Accounts that were not on screen keep their place.
+		$kept = array_diff( VR_Access::allowed_users(), $shown );
+		VR_Access::set_allowed_users( array_values( array_unique( array_merge( $kept, $picked ) ) ) );
+
+		$after   = VR_Settings::get();
+		$changes = array();
+		$labels  = array(
+			'capability'       => 'Required role',
+			'restrict_ips'     => 'Only accept Claude\'s servers',
+			'extra_ips'        => 'Extra server addresses',
+			'extra_post_types' => 'Extra content types',
+			'disabled_tools'   => 'Switched-off tools',
+			'redirect_uris'    => 'Allowed return addresses',
+			'allow_loopback'   => 'Allow Claude Code',
+		);
+		foreach ( $labels as $k => $label ) {
+			$old = is_array( $before[ $k ] ) ? implode( ', ', $before[ $k ] ) : (string) $before[ $k ];
+			$new = is_array( $after[ $k ] ) ? implode( ', ', $after[ $k ] ) : (string) $after[ $k ];
+			if ( $old !== $new ) {
+				$changes[] = $label . ': "' . str_replace( "\n", ', ', $old ) . '" -> "' . str_replace( "\n", ', ', $new ) . '"';
+			}
+		}
+		if ( $changes ) {
+			$who = wp_get_current_user();
+			VR_Access::alert( 'Visual Realm security settings changed', array_merge( $changes, array( 'Changed by: ' . $who->user_login, 'From address: ' . VR_Access::client_ip() ) ) );
+		}
 		self::back( 'saved' );
 	}
 
@@ -340,6 +373,7 @@ class VR_Admin {
 						<th scope="row"><?php esc_html_e( 'Accounts allowed to connect', 'visual-realm' ); ?></th>
 						<td><fieldset>
 						<?php foreach ( VR_Access::eligible_users() as $eu ) : ?>
+							<input type="hidden" name="shown_users[]" value="<?php echo (int) $eu->ID; ?>">
 							<label style="display:block;margin-bottom:4px"><input type="checkbox" name="allowed_users[]" value="<?php echo (int) $eu->ID; ?>" <?php checked( in_array( (int) $eu->ID, $named, true ) ); ?>> <?php echo esc_html( $eu->user_login . ' (' . $eu->user_email . ')' ); ?></label>
 						<?php endforeach; ?>
 						</fieldset>

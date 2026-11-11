@@ -124,6 +124,17 @@ class VR_Changes {
 	 * @param int $id Change ID.
 	 * @return array|WP_Error
 	 */
+	public static function get( $id ) {
+		global $wpdb;
+		return $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . VR_DB::table( 'changes' ) . ' WHERE id = %d', (int) $id ), ARRAY_A );
+	}
+
+	/**
+	 * Undo a change.
+	 *
+	 * @param int $id Change ID.
+	 * @return true|WP_Error
+	 */
 	public static function undo( $id ) {
 		global $wpdb;
 		$row = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . VR_DB::table( 'changes' ) . ' WHERE id = %d', (int) $id ), ARRAY_A );
@@ -253,6 +264,9 @@ class VR_Changes {
 			return new WP_Error( 'forbidden', 'Not allowed to delete this post.' );
 		}
 		if ( 'attachment' === $post->post_type ) {
+			if ( ! VR_Access::is_media_file( (string) get_post_meta( $post_id, '_wp_attached_file', true ) ) ) {
+				return new WP_Error( 'forbidden', 'This upload points outside the media library and was not removed.' );
+			}
 			return wp_delete_attachment( $post_id, true ) ? true : new WP_Error( 'failed', 'Could not remove the upload.' );
 		}
 		if ( 'nav_menu_item' === $post->post_type ) {

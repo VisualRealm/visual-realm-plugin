@@ -139,6 +139,10 @@ class VR_OAuth {
 			exit;
 		}
 
+		$known = array( '/vr-oauth/authorize', '/vr-oauth/token', '/vr-oauth/register', '/vr-oauth/revoke' );
+		if ( ! in_array( $rel, $known, true ) ) {
+			self::json( array( 'error' => 'not_found' ), 404 );
+		}
 		if ( '/vr-oauth/authorize' !== $rel && ! VR_Access::server_allowed( substr( $rel, 10 ) ) ) {
 			self::json( array( 'error' => 'access_denied' ), 403 );
 		}
@@ -345,7 +349,7 @@ class VR_OAuth {
 	 * Dynamic client registration (RFC 7591).
 	 */
 	protected static function register() {
-		if ( ! self::rate_ok( 'register', 20, HOUR_IN_SECONDS ) ) {
+		if ( ! self::rate_ok( 'register', 120, HOUR_IN_SECONDS ) ) {
 			self::json( array( 'error' => 'slow_down', 'error_description' => 'Too many registrations.' ), 429 );
 		}
 		$body = json_decode( (string) file_get_contents( 'php://input' ), true );
@@ -668,7 +672,7 @@ class VR_OAuth {
 	 * Handle /vr-oauth/token.
 	 */
 	protected static function token() {
-		if ( ! self::rate_ok( 'token', 60, MINUTE_IN_SECONDS ) ) {
+		if ( ! self::rate_ok( 'token', 300, MINUTE_IN_SECONDS ) ) {
 			self::token_error( 'slow_down', 'Too many requests.', 429 );
 		}
 		$post = wp_unslash( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification
@@ -770,12 +774,12 @@ class VR_OAuth {
 	 * Handle /vr-oauth/revoke (RFC 7009).
 	 */
 	protected static function revoke_endpoint() {
-		$post = wp_unslash( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification
-		self::authenticate_client( $post );
-		$token = isset( $post['token'] ) ? (string) $post['token'] : '';
+		$post   = wp_unslash( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification
+		$client = self::authenticate_client( $post );
+		$token  = isset( $post['token'] ) ? (string) $post['token'] : '';
 		if ( '' !== $token ) {
 			global $wpdb;
-			$family = $wpdb->get_var( $wpdb->prepare( 'SELECT family FROM ' . VR_DB::table( 'tokens' ) . ' WHERE token_hash = %s', hash( 'sha256', $token ) ) );
+			$family = $wpdb->get_var( $wpdb->prepare( 'SELECT family FROM ' . VR_DB::table( 'tokens' ) . ' WHERE token_hash = %s AND client_id = %s', hash( 'sha256', $token ), $client['client_id'] ) );
 			if ( $family ) {
 				self::revoke_family( $family );
 			}

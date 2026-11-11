@@ -69,17 +69,23 @@ class VR_Access {
 	 * Post types that hold submissions, orders or people and can never be
 	 * added, whatever the settings say.
 	 */
-	const NEVER_TYPES = '/(order|entr(y|ies)|submission|^nf_sub$|flamingo|user_request|subscri|payment|invoice|applica|lead|customer|message|inbox)/i';
+	const NEVER_TYPES = '/(order|entr(y|ies)|submission|^nf_sub$|flamingo|user_request|subscri|payment|invoice|applica|lead|customer|message|inbox|feedback|patient|volunteer|appointment|booking|attendee|rsvp|donation|donor|member|enquir|inquir|contact|ticket|transaction|refund|claim)/i';
 
 	/**
 	 * Options that belong to form plugins (entries, keys, notification settings).
 	 */
-	const FORM_OPTIONS = '/^(rg_|gform|gf_|gravity|gpaee|gp_|gwiz|wpforms|wpcf7|ninja_forms|nf_|frm_|forminator|fluentform|_fluentform|__fluentform|everest_forms|evf_|caldera|formidable|happyforms|jetpack_forms)/';
+	const FORM_OPTIONS = '/^(rg_|gf_|gp_|gpaee|nf_|frm_|evf_|wsf_|_transient_|_site_transient_|cron$)|(gform|gravity|gwiz|wpforms|wpcf7|ninja_forms|forminator|fluentform|everest_forms|caldera|formidable|happyforms|jetpack_forms|fusion_form|avada_form|ws_form|quform|jetform|jet_form|elementor_pro_forms|submission|_entries|_entry)/';
 
 	/**
-	 * Upload folders form plugins write to.
+	 * Media library files live in the uploads root or a year/month folder.
+	 * Plugin folders (form uploads, exports, logs, backups) never qualify.
 	 */
-	const FORM_DIRS = '#^(gravity_forms|gravityforms|wpforms|wpcf7_uploads|ninja-forms|formidable|forminator|fluentform|everest_forms_uploads|caldera-forms)(/|$)#i';
+	const MEDIA_PATH = '#^(\d{4}/\d{2}/)?[^/]+$#';
+
+	/**
+	 * Meta keys the tools may never write: they tie posts to files and menu targets.
+	 */
+	const PROTECTED_META = '/^(_wp_attached_file|_wp_attachment_|_menu_item_|_wp_trash_|_edit_lock|_edit_last|_wp_old_|_thumbnail_id$)/';
 
 	/**
 	 * Tools that cannot be switched off.
@@ -194,7 +200,7 @@ class VR_Access {
 			$max = false !== strpos( $ip, ':' ) ? 128 : 32;
 			if ( isset( $parts[1] ) ) {
 				// Very wide ranges defeat the purpose of the allowlist.
-				if ( ! ctype_digit( $parts[1] ) || (int) $parts[1] > $max || (int) $parts[1] < ( 128 === $max ? 32 : 16 ) ) {
+				if ( ! ctype_digit( $parts[1] ) || (int) $parts[1] > $max || (int) $parts[1] < ( 128 === $max ? 48 : 16 ) ) {
 					continue;
 				}
 				$out[] = $ip . '/' . (int) $parts[1];
@@ -222,6 +228,7 @@ class VR_Access {
 	 * @return bool
 	 */
 	public static function server_allowed( $where ) {
+		$where = in_array( $where, array( 'mcp', 'token', 'register', 'revoke', 'test' ), true ) ? $where : 'other';
 		if ( ! (int) VR_Settings::get( 'restrict_ips' ) ) {
 			return true;
 		}
@@ -240,7 +247,7 @@ class VR_Access {
 	 * @param string $where Endpoint.
 	 */
 	protected static function log_block( $ip, $where ) {
-		$key = 'vr_blk_' . md5( $ip . '|' . $where );
+		$key = 'vr_blk_' . md5( $ip );
 		if ( get_transient( $key ) ) {
 			return;
 		}
@@ -304,7 +311,7 @@ class VR_Access {
 		return get_users(
 			array(
 				'capability' => VR_Settings::get( 'capability' ),
-				'number'     => 200,
+				'number'     => 500,
 				'orderby'    => 'login',
 			)
 		);
@@ -370,11 +377,22 @@ class VR_Access {
 			if ( $table === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
 				$ids = array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( "SELECT DISTINCT user_id FROM {$table} WHERE revoked = 0 AND expires_at > %s", VR_DB::now() ) ) ); // phpcs:ignore WordPress.DB
 			}
-			$me = get_current_user_id();
-			if ( $me && user_can( $me, VR_Settings::get( 'capability' ) ) ) {
-				$ids[] = $me;
+			// Only accounts that already hold a connection; never whoever happens to load the page.
+			$ids = array_values( array_unique( array_filter( $ids ) ) );
+			VR_Settings::save( array( 'allowed_users' => $ids ) );
+			if ( $ids ) {
+				self::alert(
+					'Visual Realm updated: connection accounts named',
+					array(
+						'This site now only accepts connections from named accounts.',
+						'Named automatically because they were already connected: ' . implode( ', ', array_map( function ( $id ) {
+							$u = get_userdata( $id );
+							return $u ? $u->user_login : '#' . $id;
+						}, $ids ) ),
+					),
+					$ids
+				);
 			}
-			VR_Settings::save( array( 'allowed_users' => array_values( array_unique( array_filter( $ids ) ) ) ) );
 		}
 		$ttl = 30 * DAY_IN_SECONDS;
 		VR_Settings::save( array( 'refresh_ttl' => $ttl ) );
@@ -430,6 +448,16 @@ class VR_Access {
 	}
 
 	/**
+	 * Whether tools may write or delete a meta key.
+	 *
+	 * @param string $key Key.
+	 * @return bool
+	 */
+	public static function meta_writable( $key ) {
+		return is_string( $key ) && '' !== $key && ! preg_match( self::PROTECTED_META, $key );
+	}
+
+	/**
 	 * Whether an option belongs to a form plugin.
 	 *
 	 * @param string $name Option.
@@ -449,7 +477,7 @@ class VR_Access {
 	public static function is_media_file( $rel ) {
 		global $wpdb;
 		$rel = ltrim( str_replace( '\\', '/', (string) $rel ), '/' );
-		if ( '' === $rel || preg_match( self::FORM_DIRS, $rel ) ) {
+		if ( '' === $rel || ! preg_match( self::MEDIA_PATH, $rel ) || '.' === $rel[0] ) {
 			return false;
 		}
 		$dir  = dirname( $rel );

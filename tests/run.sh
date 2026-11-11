@@ -38,7 +38,7 @@ deploy() {
   php "$site/activate.php" >/dev/null
   # The suites call from this machine: let localhost through the address allowlist and name the admin account.
   php -r '$_SERVER["HTTP_HOST"]="localhost:8890";$_SERVER["REQUEST_URI"]="/";require $argv[1]."/wp/wp-load.php";
-    $s=(array)get_option("vr_settings",array());$s["extra_ips"]="127.0.0.1\n::1";$s["restrict_ips"]=1;$s["allowed_users"]=array(1);$s["disabled_tools"]=array();$s["extra_post_types"]="";
+    $s=(array)get_option("vr_settings",array());$s["extra_ips"]="127.0.0.1\n::1";$s["restrict_ips"]=1;$s["allow_loopback"]=1;$s["allowed_users"]=array(1);$s["disabled_tools"]=array();$s["extra_post_types"]="";
     update_option("vr_settings",$s,false);update_option("vr_access_rev",3,false);delete_option("vr_blocked_log");
     global $wpdb;$wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE \"%vr_rl_%\" OR option_name LIKE \"%vr_blk_%\"");' "$site"
 }

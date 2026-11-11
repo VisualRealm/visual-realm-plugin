@@ -585,6 +585,12 @@ class VR_Tools {
 		if ( isset( $out['post_status'] ) && ! in_array( $out['post_status'], array( 'draft', 'publish', 'pending', 'private', 'future' ), true ) ) {
 			throw new VR_Tool_Error( 'Unsupported status: ' . $out['post_status'] );
 		}
+		if ( ! empty( $out['post_parent'] ) ) {
+			$parent = get_post( $out['post_parent'] );
+			if ( ! $parent || ! VR_Access::post_type_allowed( $parent->post_type ) ) {
+				throw new VR_Tool_Error( 'Parent not found.' );
+			}
+		}
 		return $out;
 	}
 
@@ -722,6 +728,9 @@ class VR_Tools {
 		if ( ! VR_Access::post_type_allowed( $type ) ) {
 			throw new VR_Tool_Error( 'This connector cannot create ' . $type . ' content.' );
 		}
+		if ( in_array( $type, array( 'attachment', 'nav_menu_item' ), true ) ) {
+			throw new VR_Tool_Error( 'Use wp_upload_media for media and wp_add_menu_item for menu items.' );
+		}
 		if ( ! current_user_can( $pto->cap->create_posts ) ) {
 			throw new VR_Tool_Error( 'Not allowed to create ' . $type . '.' );
 		}
@@ -734,6 +743,11 @@ class VR_Tools {
 			$arr['post_content'] = '';
 		}
 		if ( isset( $a['meta'] ) && is_array( $a['meta'] ) ) {
+			foreach ( array_keys( $a['meta'] ) as $mk ) {
+				if ( ! VR_Access::meta_writable( (string) $mk ) ) {
+					throw new VR_Tool_Error( 'The ' . $mk . ' field is managed by WordPress and cannot be set here.' );
+				}
+			}
 			$arr['meta_input'] = $a['meta'];
 		}
 		$id = wp_insert_post( wp_slash( $arr ), true );
@@ -871,6 +885,9 @@ class VR_Tools {
 		if ( '' === $key ) {
 			throw new VR_Tool_Error( 'key is required.' );
 		}
+		if ( ! VR_Access::meta_writable( $key ) ) {
+			throw new VR_Tool_Error( 'The ' . $key . ' field is managed by WordPress and cannot be changed here. Use wp_set_featured_image for featured images.' );
+		}
 		if ( is_protected_meta( $key, 'post' ) && ! current_user_can( 'edit_post', $p->ID ) ) {
 			throw new VR_Tool_Error( 'Not allowed.' );
 		}
@@ -924,6 +941,9 @@ class VR_Tools {
 	protected static function tool_wp_delete_post_meta( array $a ) {
 		$p   = self::post( self::int( $a, 'id' ) );
 		$key = self::str( $a, 'key' );
+		if ( ! VR_Access::meta_writable( $key ) ) {
+			throw new VR_Tool_Error( 'The ' . $key . ' field is managed by WordPress and cannot be removed here.' );
+		}
 		if ( ! metadata_exists( 'post', $p->ID, $key ) ) {
 			throw new VR_Tool_Error( 'Meta key not found.' );
 		}
@@ -1007,6 +1027,16 @@ class VR_Tools {
 			&& ! preg_match( '/[\x00-\x20\x7f\\\\]/', $url );
 		if ( ! $same ) {
 			throw new VR_Tool_Error( 'URL must be on this site.' );
+		}
+		// Pages only: never files, the REST API, admin or feeds of raw data.
+		$path = strtolower( rawurldecode( isset( $parts['path'] ) ? $parts['path'] : '/' ) );
+		$home_path = strtolower( isset( $home['path'] ) ? untrailingslashit( $home['path'] ) : '' );
+		$rel_path  = '' !== $home_path && 0 === strpos( $path, $home_path ) ? substr( $path, strlen( $home_path ) ) : $path;
+		$query     = strtolower( rawurldecode( isset( $parts['query'] ) ? $parts['query'] : '' ) );
+		$ext       = pathinfo( $rel_path, PATHINFO_EXTENSION );
+		$page_like = '' === $ext || in_array( $ext, array( 'html', 'htm' ), true ) || '/robots.txt' === $rel_path || preg_match( '#^/[a-z0-9_\-]*sitemap[a-z0-9_\-]*\.xml$#', $rel_path );
+		if ( ! $page_like || preg_match( '#^/(wp-content|wp-includes|wp-admin|wp-json|xmlrpc|wp-login)#', $rel_path ) || false !== strpos( $query, 'rest_route' ) || false !== strpos( $rel_path, '..' ) ) {
+			throw new VR_Tool_Error( 'wp_get_rendered checks pages, not files or API endpoints. Use wp_get_file for media.' );
 		}
 		$fetch = add_query_arg( 'vr_nocache', wp_generate_password( 8, false ), $url );
 		$res   = wp_remote_get(
@@ -1368,6 +1398,13 @@ class VR_Tools {
 		foreach ( wp_get_nav_menus() as $menu ) {
 			$items = array();
 			foreach ( (array) wp_get_nav_menu_items( $menu->term_id ) as $item ) {
+				if ( 'post_type' === $item->type && ! VR_Access::post_type_allowed( $item->object ) ) {
+					$items[] = array(
+						'id'     => $item->ID,
+						'hidden' => 'Links to content this connector cannot access.',
+					);
+					continue;
+				}
 				$items[] = array(
 					'id'        => $item->ID,
 					'title'     => $item->title,
@@ -1832,6 +1869,10 @@ class VR_Tools {
 	}
 
 	protected static function tool_mcp_undo_change( array $a ) {
+		$row = VR_Changes::get( self::int( $a, 'id' ) );
+		if ( $row && ! VR_Access::tool_enabled( (string) $row['tool'] ) ) {
+			throw new VR_Tool_Error( 'That change was made with ' . $row['tool'] . ', which is switched off on this site. Undo it from the Visual Realm screen in WordPress admin.' );
+		}
 		return VR_Changes::undo( self::int( $a, 'id' ) );
 	}
 }
