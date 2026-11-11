@@ -3,7 +3,7 @@
  * Plugin Name:       Visual Realm
  * Plugin URI:        https://thevisualrealm.com
  * Description:       Secure connector that lets Visual Realm build and manage this site's pages, SEO and media.
- * Version:           0.1.0
+ * Version:           0.1.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Visual Realm
@@ -15,7 +15,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'VR_PLUGIN_VERSION', '0.1.0' );
+define( 'VR_PLUGIN_VERSION', '0.1.1' );
 define( 'VR_PLUGIN_FILE', __FILE__ );
 define( 'VR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'VR_DB_VERSION', '1' );

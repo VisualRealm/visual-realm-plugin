@@ -21,6 +21,7 @@ class VR_OAuth {
 	 */
 	public static function init() {
 		add_action( 'init', array( __CLASS__, 'route' ), 1 );
+		add_action( 'rest_api_init', array( __CLASS__, 'register_rest_routes' ) );
 	}
 
 	/* ---------------------------------------------------------------------
@@ -33,7 +34,10 @@ class VR_OAuth {
 	 * @return string
 	 */
 	public static function issuer() {
-		return untrailingslashit( home_url() );
+		// A path-based issuer lets clients find metadata at
+		// {issuer}/.well-known/openid-configuration, which reaches WordPress even on
+		// hosts (SiteGround) that answer everything under the root /.well-known/ themselves.
+		return untrailingslashit( rest_url( VR_MCP::NS ) );
 	}
 
 	/**
@@ -52,7 +56,33 @@ class VR_OAuth {
 	 * @return string
 	 */
 	public static function resource_metadata_url() {
-		return home_url( '/.well-known/oauth-protected-resource' );
+		// Query-string form: never intercepted by host /.well-known/ rules or nginx
+		// "deny /." dotfile rules, and works in subfolder installs.
+		return add_query_arg( 'rest_route', '/' . VR_MCP::NS . '/.well-known/oauth-protected-resource', home_url( '/' ) );
+	}
+
+	/**
+	 * Register REST copies of the discovery documents.
+	 */
+	public static function register_rest_routes() {
+		$docs = array(
+			'/.well-known/oauth-protected-resource'   => 'resource_metadata',
+			'/.well-known/oauth-authorization-server' => 'server_metadata',
+			'/.well-known/openid-configuration'       => 'server_metadata',
+		);
+		foreach ( $docs as $route => $method ) {
+			register_rest_route(
+				VR_MCP::NS,
+				$route,
+				array(
+					'methods'             => 'GET',
+					'permission_callback' => '__return_true',
+					'callback'            => function () use ( $method ) {
+						self::json( self::$method() );
+					},
+				)
+			);
+		}
 	}
 
 	/* ---------------------------------------------------------------------
@@ -97,6 +127,12 @@ class VR_OAuth {
 		}
 
 		self::cors();
+		// Keep page caches (SG Optimizer, WP Rocket, Cloudflare) off the sign-in flow.
+		if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+			define( 'DONOTCACHEPAGE', true );
+		}
+		nocache_headers();
+		header( 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0' );
 		$method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( sanitize_key( $_SERVER['REQUEST_METHOD'] ) ) : 'GET';
 		if ( 'OPTIONS' === $method ) {
 			status_header( 204 );
@@ -202,6 +238,7 @@ class VR_OAuth {
 			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post', 'client_secret_basic' ),
 			'revocation_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post', 'client_secret_basic' ),
 			'scopes_supported'                      => array( 'mcp' ),
+			'authorization_response_iss_parameter_supported' => true,
 			'client_id_metadata_document_supported' => true,
 		);
 	}
