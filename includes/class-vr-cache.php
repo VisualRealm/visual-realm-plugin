@@ -193,7 +193,8 @@ class VR_Cache {
 			sg_cachepress_purge_cache( $everything ? null : $url );
 			return $everything ? 'site' : 'page';
 		}
-		if ( ! self::on_siteground() ) {
+		global $kinsta_cache;
+		if ( is_object( $kinsta_cache ) ) {
 			return 'not on SiteGround';
 		}
 		// SiteGround's cache accepts PURGE on the local web server; the path may end in (.*) to cover children.
@@ -202,16 +203,20 @@ class VR_Cache {
 		$path = ( '' === $path ? '/' : $path ) . ( $everything ? '(.*)' : '' );
 		$sock = @fsockopen( '127.0.0.1', 80, $errno, $errstr, 2 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions
 		if ( ! $sock ) {
-			return 'purge connection failed: ' . $errstr;
+			return 'not on SiteGround';
 		}
 		fwrite( $sock, "PURGE {$path} HTTP/1.0\r\nHost: {$host}\r\nConnection: Close\r\n\r\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions
 		stream_set_timeout( $sock, 2 );
 		$status = (string) fgets( $sock, 128 );
 		fclose( $sock ); // phpcs:ignore WordPress.WP.AlternativeFunctions
-		if ( preg_match( '#^HTTP/\S+\s+(\d{3})#', $status, $m ) && (int) $m[1] < 400 ) {
-			return $everything ? 'site' : 'page';
+		if ( preg_match( '#^HTTP/\S+\s+(\d{3})#', $status, $m ) ) {
+			$code = (int) $m[1];
+			if ( $code < 300 ) {
+				return $everything ? 'site' : 'page';
+			}
+			return 405 === $code || 501 === $code ? 'not on SiteGround' : 'purge returned ' . $code;
 		}
-		return 'purge returned ' . trim( $status );
+		return 'not on SiteGround';
 	}
 
 	/**
