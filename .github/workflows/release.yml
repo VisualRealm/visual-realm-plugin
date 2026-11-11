@@ -1,12 +1,20 @@
 name: Release
 
+# Publishes a signed release whenever main carries a plugin version that has no release yet.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    paths:
+      - visual-realm.php
+      - .github/workflows/release.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -14,15 +22,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check tag matches plugin version
+      - name: Read plugin version
+        id: ver
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           version="$(grep -oE "VR_PLUGIN_VERSION', '[0-9.]+" visual-realm.php | grep -oE '[0-9.]+$')"
           header="$(grep -oE '^ \* Version: +[0-9.]+' visual-realm.php | grep -oE '[0-9.]+$')"
-          echo "tag=$tag constant=$version header=$header"
-          test "$tag" = "$version" && test "$tag" = "$header"
+          echo "constant=$version header=$header"
+          test -n "$version" && test "$version" = "$header"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if this version is already released
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" >/dev/null 2>&1; then
+            echo "v${{ steps.ver.outputs.version }} already released"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and sign
+        if: steps.check.outputs.skip == 'false'
         env:
           VR_SIGNING_KEY: ${{ secrets.VR_SIGNING_KEY }}
         run: |
@@ -34,6 +56,7 @@ jobs:
           rm -f "$keyfile"
 
       - name: Check signature matches the key built into the plugin
+        if: steps.check.outputs.skip == 'false'
         run: |
           php -r '
           preg_match("/PUBLIC_KEY = \x27([^\x27]+)\x27/", file_get_contents("includes/class-vr-updater.php"), $m);
@@ -42,8 +65,10 @@ jobs:
           echo "signature ok\n";'
 
       - name: Publish release
+        if: steps.check.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/visual-realm.zip dist/visual-realm.zip.sig \
-            --title "${GITHUB_REF_NAME#v}" --generate-notes
+          v="${{ steps.ver.outputs.version }}"
+          gh release create "v$v" dist/visual-realm.zip dist/visual-realm.zip.sig \
+            --target "$GITHUB_SHA" --title "$v" --generate-notes
