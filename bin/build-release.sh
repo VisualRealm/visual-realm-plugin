@@ -7,6 +7,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$here/dist}"
+mkdir -p "$out" && out="$(cd "$out" && pwd)"
 key="${VR_SIGNING_KEY_FILE:?Set VR_SIGNING_KEY_FILE to the signing key file}"
 
 version="$(grep -oE "VR_PLUGIN_VERSION', '[0-9.]+" "$here/visual-realm.php" | grep -oE '[0-9.]+$')"
