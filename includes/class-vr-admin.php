@@ -61,7 +61,12 @@ class VR_Admin {
 		if ( ! is_readable( $file ) ) {
 			return '';
 		}
-		return '<img src="' . esc_url( plugins_url( 'assets/logo.svg', VR_PLUGIN_FILE ) ) . '" alt="Visual Realm" style="height:36px;width:auto;vertical-align:middle;margin-right:12px">';
+		$svg = (string) file_get_contents( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		if ( ! preg_match( '#^<svg[^>]*>.*</svg>\s*$#s', $svg ) || false !== stripos( $svg, '<script' ) || false !== stripos( $svg, ' on' ) ) {
+			return '';
+		}
+		$svg = preg_replace( '#^<svg #', '<svg role="img" aria-label="Visual Realm" style="height:40px;width:40px;vertical-align:middle;margin-right:12px" ', $svg );
+		return $svg;
 	}
 
 	/**
