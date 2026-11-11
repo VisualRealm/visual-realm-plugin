@@ -193,30 +193,40 @@ class VR_Cache {
 			sg_cachepress_purge_cache( $everything ? null : $url );
 			return $everything ? 'site' : 'page';
 		}
-		global $kinsta_cache;
-		if ( is_object( $kinsta_cache ) ) {
+		// Same channel SiteGround's own plugin uses: a JSON command to the Site Tools socket.
+		$sock_file = '/chroot/tmp/site-tools.sock';
+		if ( ! @file_exists( $sock_file ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors
 			return 'not on SiteGround';
 		}
-		// SiteGround's cache accepts PURGE on the local web server; the path may end in (.*) to cover children.
 		$host = preg_replace( '/^www\./', '', (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
 		$path = $everything ? '/' : (string) wp_parse_url( $url, PHP_URL_PATH );
 		$path = ( '' === $path ? '/' : $path ) . ( $everything ? '(.*)' : '' );
-		$sock = @fsockopen( '127.0.0.1', 80, $errno, $errstr, 2 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors,WordPress.WP.AlternativeFunctions
+		$sock = @stream_socket_client( 'unix://' . $sock_file, $errno, $errstr, 5 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
 		if ( ! $sock ) {
-			return 'not on SiteGround';
+			return 'SiteGround purge failed: ' . $errstr;
 		}
-		fwrite( $sock, "PURGE {$path} HTTP/1.0\r\nHost: {$host}\r\nConnection: Close\r\n\r\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions
-		stream_set_timeout( $sock, 2 );
-		$status = (string) fgets( $sock, 128 );
+		$request = array(
+			'api'      => 'domain-all',
+			'cmd'      => 'update',
+			'params'   => array(
+				'flush_cache' => '1',
+				'id'          => $host,
+				'path'        => $path,
+			),
+			'settings' => array( 'json' => 1 ),
+		);
+		fwrite( $sock, wp_json_encode( $request, JSON_FORCE_OBJECT ) . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		stream_set_timeout( $sock, 5 );
+		$response = fgets( $sock, 32 * 1024 );
 		fclose( $sock ); // phpcs:ignore WordPress.WP.AlternativeFunctions
-		if ( preg_match( '#^HTTP/\S+\s+(\d{3})#', $status, $m ) ) {
-			$code = (int) $m[1];
-			if ( $code < 300 ) {
-				return $everything ? 'site' : 'page';
-			}
-			return 405 === $code || 501 === $code ? 'not on SiteGround' : 'purge returned ' . $code;
+		$data = is_string( $response ) ? json_decode( $response, true ) : null;
+		if ( ! is_array( $data ) ) {
+			return 'SiteGround purge: no response';
 		}
-		return 'not on SiteGround';
+		if ( isset( $data['err_code'] ) ) {
+			return 'SiteGround purge failed: ' . ( isset( $data['err_msg'] ) ? sanitize_text_field( (string) $data['err_msg'] ) : (string) $data['err_code'] );
+		}
+		return $everything ? 'site' : 'page';
 	}
 
 	/**
