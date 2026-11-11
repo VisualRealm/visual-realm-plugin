@@ -30,7 +30,12 @@ class VR_Settings {
 			'cloudflare_token'   => '',
 			'update_token'       => '',
 			'access_ttl'         => HOUR_IN_SECONDS,
-			'refresh_ttl'        => 90 * DAY_IN_SECONDS,
+			'refresh_ttl'        => 30 * DAY_IN_SECONDS,
+			'restrict_ips'       => 1,
+			'extra_ips'          => '',
+			'allowed_users'      => array(),
+			'disabled_tools'     => array(),
+			'extra_post_types'   => '',
 		);
 	}
 

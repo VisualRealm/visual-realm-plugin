@@ -123,8 +123,17 @@ class VR_Admin {
 		if ( ! empty( $_POST['update_clear'] ) ) {
 			$values['update_token'] = '';
 		}
+		$values['restrict_ips']     = empty( $_POST['restrict_ips'] ) ? 0 : 1;
+		$values['extra_ips']        = implode( "\n", VR_Access::parse_ranges( isset( $_POST['extra_ips'] ) ? sanitize_textarea_field( wp_unslash( $_POST['extra_ips'] ) ) : '' ) );
+		$values['extra_post_types'] = implode( ', ', array_filter( array_map( 'sanitize_key', preg_split( '/[\s,]+/', isset( $_POST['extra_post_types'] ) ? sanitize_text_field( wp_unslash( $_POST['extra_post_types'] ) ) : '' ) ) ) );
+		$enabled                    = isset( $_POST['tools'] ) && is_array( $_POST['tools'] ) ? array_map( 'sanitize_key', wp_unslash( $_POST['tools'] ) ) : array();
+		$values['disabled_tools']   = array_values( array_diff( array_keys( VR_Tools::catalog() ), $enabled, VR_Access::ALWAYS_ON ) );
 		delete_transient( VR_Updater::TRANSIENT );
 		VR_Settings::save( $values );
+
+		$eligible = wp_list_pluck( VR_Access::eligible_users(), 'ID' );
+		$picked   = isset( $_POST['allowed_users'] ) && is_array( $_POST['allowed_users'] ) ? array_map( 'absint', wp_unslash( $_POST['allowed_users'] ) ) : array();
+		VR_Access::set_allowed_users( array_values( array_intersect( $picked, array_map( 'intval', $eligible ) ) ) );
 		self::back( 'saved' );
 	}
 
@@ -294,13 +303,71 @@ class VR_Admin {
 				</table>
 			<?php endif; ?>
 
+			<h2><?php esc_html_e( 'Security', 'visual-realm' ); ?></h2>
+			<?php
+			$here_ip = VR_Access::client_ip();
+			$blocked = VR_Access::blocked_log();
+			$named   = VR_Access::allowed_users();
+			?>
+			<?php if ( empty( $named ) ) : ?>
+				<div class="notice notice-warning inline"><p><?php esc_html_e( 'No accounts are allowed to connect yet. Tick at least one under Settings below.', 'visual-realm' ); ?></p></div>
+			<?php endif; ?>
+			<p><?php echo esc_html( sprintf( /* translators: %s: IP */ __( 'Your browser reaches this site from %s.', 'visual-realm' ), '' !== $here_ip ? $here_ip : '?' ) ); ?>
+			<?php echo (int) $s['restrict_ips'] ? esc_html__( 'Only Claude\'s servers (and any extra addresses below) can use the connector.', 'visual-realm' ) : '<strong>' . esc_html__( 'Address restriction is off: any address holding a valid token can use the connector.', 'visual-realm' ) . '</strong>'; ?></p>
+			<?php if ( ! empty( $blocked ) ) : ?>
+				<p><?php esc_html_e( 'Recently refused requests (not from an allowed address):', 'visual-realm' ); ?></p>
+				<table class="widefat striped" style="max-width:720px">
+					<thead><tr><th><?php esc_html_e( 'When', 'visual-realm' ); ?></th><th><?php esc_html_e( 'Address', 'visual-realm' ); ?></th><th><?php esc_html_e( 'Connected via', 'visual-realm' ); ?></th><th><?php esc_html_e( 'Endpoint', 'visual-realm' ); ?></th></tr></thead>
+					<tbody>
+					<?php foreach ( $blocked as $b ) : ?>
+						<tr>
+							<td><?php echo esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $b['time'] ) ); ?></td>
+							<td><code><?php echo esc_html( $b['ip'] ); ?></code></td>
+							<td><code><?php echo esc_html( $b['remote'] ); ?></code></td>
+							<td><?php echo esc_html( $b['where'] ); ?></td>
+						</tr>
+					<?php endforeach; ?>
+					</tbody>
+				</table>
+			<?php endif; ?>
+
 			<h2><?php esc_html_e( 'Settings', 'visual-realm' ); ?></h2>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 				<?php wp_nonce_field( 'vr_save_settings' ); ?>
 				<input type="hidden" name="action" value="vr_save_settings">
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><label for="vr-cap"><?php esc_html_e( 'Who can connect', 'visual-realm' ); ?></label></th>
+						<th scope="row"><?php esc_html_e( 'Accounts allowed to connect', 'visual-realm' ); ?></th>
+						<td><fieldset>
+						<?php foreach ( VR_Access::eligible_users() as $eu ) : ?>
+							<label style="display:block;margin-bottom:4px"><input type="checkbox" name="allowed_users[]" value="<?php echo (int) $eu->ID; ?>" <?php checked( in_array( (int) $eu->ID, $named, true ) ); ?>> <?php echo esc_html( $eu->user_login . ' (' . $eu->user_email . ')' ); ?></label>
+						<?php endforeach; ?>
+						</fieldset>
+						<p class="description"><?php esc_html_e( 'Only ticked accounts can approve a connection, and their connections stop working the moment they are unticked. Ticked accounts get an email whenever a connection is approved.', 'visual-realm' ); ?></p></td>
+					</tr>
+					<tr>
+						<th scope="row"><?php esc_html_e( 'Server addresses', 'visual-realm' ); ?></th>
+						<td><label><input type="checkbox" name="restrict_ips" value="1" <?php checked( (int) $s['restrict_ips'], 1 ); ?>> <?php esc_html_e( 'Only accept connector traffic from Claude\'s servers', 'visual-realm' ); ?></label>
+						<p class="description"><?php echo esc_html( sprintf( /* translators: %s: ranges */ __( 'Claude\'s published ranges (%s) are always included. Claude Code runs on your own computer, so add your office address below to use it.', 'visual-realm' ), implode( ', ', VR_Access::ANTHROPIC ) ) ); ?></p>
+						<textarea name="extra_ips" rows="2" class="large-text code" placeholder="203.0.113.10"><?php echo esc_textarea( $s['extra_ips'] ); ?></textarea>
+						<p class="description"><?php esc_html_e( 'Extra addresses or ranges, one per line.', 'visual-realm' ); ?></p></td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="vr-ept"><?php esc_html_e( 'Extra content types', 'visual-realm' ); ?></label></th>
+						<td><input id="vr-ept" type="text" class="regular-text code" name="extra_post_types" value="<?php echo esc_attr( $s['extra_post_types'] ); ?>">
+						<p class="description"><?php echo esc_html( sprintf( /* translators: %s: types */ __( 'The connector can only reach: %s. Add other content types here, comma separated. Orders, form entries, submissions and similar types can never be added.', 'visual-realm' ), implode( ', ', VR_Access::POST_TYPES ) ) ); ?></p></td>
+					</tr>
+					<tr>
+						<th scope="row"><?php esc_html_e( 'Tools', 'visual-realm' ); ?></th>
+						<td><fieldset style="columns:2;max-width:900px">
+						<?php foreach ( VR_Tools::catalog() as $tname => $tdesc ) : ?>
+							<label style="display:block;margin-bottom:4px;break-inside:avoid" title="<?php echo esc_attr( $tdesc ); ?>"><input type="checkbox" name="tools[]" value="<?php echo esc_attr( $tname ); ?>" <?php checked( VR_Access::tool_enabled( $tname ) ); ?> <?php disabled( in_array( $tname, VR_Access::ALWAYS_ON, true ) ); ?>> <code><?php echo esc_html( $tname ); ?></code></label>
+						<?php endforeach; ?>
+						</fieldset>
+						<p class="description"><?php esc_html_e( 'Unticked tools disappear from the connector on this site.', 'visual-realm' ); ?></p></td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="vr-cap"><?php esc_html_e( 'Required role', 'visual-realm' ); ?></label></th>
 						<td><select id="vr-cap" name="capability">
 							<option value="manage_options" <?php selected( $s['capability'], 'manage_options' ); ?>><?php esc_html_e( 'Administrators', 'visual-realm' ); ?></option>
 							<option value="edit_others_pages" <?php selected( $s['capability'], 'edit_others_pages' ); ?>><?php esc_html_e( 'Editors and administrators', 'visual-realm' ); ?></option>

@@ -77,6 +77,9 @@ class VR_MCP {
 	 * @param WP_REST_Request $request Request.
 	 */
 	public static function handle( WP_REST_Request $request ) {
+		if ( ! VR_Access::server_allowed( 'mcp' ) ) {
+			self::send( 403, array( 'error' => 'forbidden' ) );
+		}
 		$auth = VR_OAuth::authorization_header();
 		if ( '' === $auth ) {
 			$auth = (string) $request->get_header( 'authorization' );
@@ -193,6 +196,9 @@ class VR_MCP {
 				if ( ! VR_Tools::exists( $name ) ) {
 					return self::error( $id, -32602, 'Unknown tool: ' . $name );
 				}
+				if ( ! VR_Access::tool_enabled( $name ) ) {
+					return self::error( $id, -32602, 'The ' . $name . ' tool is switched off on this site.' );
+				}
 				$args   = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
 				$result = VR_Tools::call( $name, $args );
 				break;
@@ -215,7 +221,7 @@ class VR_MCP {
 	protected static function instructions() {
 		$site = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
 		return sprintf(
-			'These tools manage the WordPress site "%1$s" (%2$s). New posts and pages are drafts unless status "publish" is passed. wp_update_post never changes status or dates unless you pass them. For large page bodies, create the post with the first part and add the rest with wp_append_content. wp_alter_post replaces exact text and fails unless the match count equals "expected" (default 1). Every write is logged; mcp_list_changes shows the log and mcp_undo_change reverts one change. After editing a published page, call vr_purge_cache for that page; edits to Avada layout sections, menus or global elements automatically purge the whole site, including WP Rocket used CSS and Avada compiled CSS. Use wp_get_rendered to confirm text on the live page (count strings, or find to see surrounding HTML). Large options such as fusion_options: read one part with wp_get_option key. Menu labels and links: wp_update_menu_item / wp_delete_menu_item. Read SVG or other uploaded files with wp_get_file.',
+			'These tools manage the WordPress site "%1$s" (%2$s). New posts and pages are drafts unless status "publish" is passed. wp_update_post never changes status or dates unless you pass them. For large page bodies, create the post with the first part and add the rest with wp_append_content. wp_alter_post replaces exact text and fails unless the match count equals "expected" (default 1). Every write is logged; mcp_list_changes shows the log and mcp_undo_change reverts one change. After editing a published page, call vr_purge_cache for that page; edits to Avada layout sections, menus or global elements automatically purge the whole site, including WP Rocket used CSS and Avada compiled CSS. Use wp_get_rendered to confirm text on the live page (count strings, or find to see surrounding HTML). Large options such as fusion_options: read one part with wp_get_option key. Menu labels and links: wp_update_menu_item / wp_delete_menu_item. Read media library files (SVG and others) with wp_get_file. Form entries, orders and other submissions are not available through this connector.',
 			$site,
 			home_url()
 		);

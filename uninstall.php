@@ -13,5 +13,7 @@ foreach ( array( 'clients', 'tokens', 'changes' ) as $t ) {
 }
 delete_option( 'vr_settings' );
 delete_option( 'vr_db_version' );
+delete_option( 'vr_access_rev' );
+delete_option( 'vr_blocked_log' );
 $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '\\_transient\\_vr\\_%' OR option_name LIKE '\\_transient\\_timeout\\_vr\\_%'" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 wp_clear_scheduled_hook( 'vr_daily_cleanup' );

@@ -387,6 +387,19 @@ class VR_Tools {
 	}
 
 	/**
+	 * Every tool with its first-sentence description, for the settings screen.
+	 *
+	 * @return array name => description
+	 */
+	public static function catalog() {
+		$out = array();
+		foreach ( self::registry() as $name => $def ) {
+			$out[ $name ] = preg_replace( '/(?<=\.)\s.*$/s', '', (string) $def[0] );
+		}
+		return $out;
+	}
+
+	/**
 	 * MCP tool definitions.
 	 *
 	 * @return array
@@ -394,6 +407,9 @@ class VR_Tools {
 	public static function definitions() {
 		$out = array();
 		foreach ( self::registry() as $name => $def ) {
+			if ( ! VR_Access::tool_enabled( $name ) ) {
+				continue;
+			}
 			list( $desc, $props, $required, $hints ) = $def;
 			$schema = array(
 				'type'       => 'object',
@@ -422,6 +438,9 @@ class VR_Tools {
 	public static function call( $name, array $args ) {
 		$method = 'tool_' . $name;
 		try {
+			if ( ! VR_Access::tool_enabled( $name ) ) {
+				throw new VR_Tool_Error( 'The ' . $name . ' tool is switched off on this site.' );
+			}
 			$required = self::registry()[ $name ][2];
 			foreach ( $required as $r ) {
 				if ( ! array_key_exists( $r, $args ) ) {
@@ -494,6 +513,9 @@ class VR_Tools {
 		$post = get_post( (int) $id );
 		if ( ! $post ) {
 			throw new VR_Tool_Error( 'No post with ID ' . (int) $id . '.' );
+		}
+		if ( ! VR_Access::post_type_allowed( $post->post_type ) ) {
+			throw new VR_Tool_Error( 'Post ' . (int) $id . ' is a ' . $post->post_type . ', which this connector cannot access.' );
 		}
 		if ( $edit ? ! current_user_can( 'edit_post', $post->ID ) : ! current_user_can( 'read_post', $post->ID ) ) {
 			throw new VR_Tool_Error( 'Not allowed to access post ' . $post->ID . '.' );
@@ -606,6 +628,9 @@ class VR_Tools {
 	protected static function tool_wp_get_post_types( array $a ) {
 		$out = array();
 		foreach ( get_post_types( array( 'show_ui' => true ), 'objects' ) as $pt ) {
+			if ( ! VR_Access::post_type_allowed( $pt->name ) ) {
+				continue;
+			}
 			$out[] = array(
 				'name'         => $pt->name,
 				'label'        => $pt->label,
@@ -622,8 +647,17 @@ class VR_Tools {
 
 	protected static function tool_wp_get_posts( array $a ) {
 		$order_by = self::str( $a, 'orderby', 'modified' );
+		$type     = self::str( $a, 'post_type', 'any' );
+		if ( 'any' === $type ) {
+			$type = array_values( array_intersect( VR_Access::post_types(), get_post_types( array( 'exclude_from_search' => false ) ) ) );
+			if ( empty( $type ) ) {
+				return array( 'total' => 0, 'page' => 1, 'posts' => array() );
+			}
+		} elseif ( ! VR_Access::post_type_allowed( $type ) ) {
+			throw new VR_Tool_Error( 'This connector cannot access ' . $type . ' content.' );
+		}
 		$q        = array(
-			'post_type'      => self::str( $a, 'post_type', 'any' ),
+			'post_type'      => $type,
 			'post_status'    => self::str( $a, 'status', 'any' ),
 			'posts_per_page' => max( 1, min( 100, self::int( $a, 'per_page', 20 ) ) ),
 			'paged'          => max( 1, self::int( $a, 'page', 1 ) ),
@@ -640,7 +674,7 @@ class VR_Tools {
 		$query = new WP_Query( $q );
 		$rows  = array();
 		foreach ( $query->posts as $p ) {
-			if ( current_user_can( 'read_post', $p->ID ) ) {
+			if ( VR_Access::post_type_allowed( $p->post_type ) && current_user_can( 'read_post', $p->ID ) ) {
 				$rows[] = self::row( $p );
 			}
 		}
@@ -684,6 +718,9 @@ class VR_Tools {
 		$pto  = get_post_type_object( $type );
 		if ( ! $pto ) {
 			throw new VR_Tool_Error( 'Unknown post type: ' . $type );
+		}
+		if ( ! VR_Access::post_type_allowed( $type ) ) {
+			throw new VR_Tool_Error( 'This connector cannot create ' . $type . ' content.' );
 		}
 		if ( ! current_user_can( $pto->cap->create_posts ) ) {
 			throw new VR_Tool_Error( 'Not allowed to create ' . $type . '.' );
@@ -1370,7 +1407,7 @@ class VR_Tools {
 		$object_id = self::int( $a, 'object_id' );
 		if ( $object_id ) {
 			$target = get_post( $object_id );
-			if ( ! $target ) {
+			if ( ! $target || ! VR_Access::post_type_allowed( $target->post_type ) ) {
 				throw new VR_Tool_Error( 'object_id not found.' );
 			}
 			$data['menu-item-type']      = 'post_type';
@@ -1524,6 +1561,9 @@ class VR_Tools {
 		$root = realpath( defined( 'UPLOADS' ) ? ABSPATH . UPLOADS : WP_CONTENT_DIR . '/uploads' );
 		if ( ! $real || ! $root || 0 !== strpos( $real, $root . DIRECTORY_SEPARATOR ) || ! is_file( $real ) ) {
 			throw new VR_Tool_Error( 'File not found.' );
+		}
+		if ( ! VR_Access::is_media_file( substr( $real, strlen( $root ) + 1 ) ) ) {
+			throw new VR_Tool_Error( 'Only files in the media library can be read through the connector.' );
 		}
 		$ext    = strtolower( pathinfo( $real, PATHINFO_EXTENSION ) );
 		$text   = array( 'svg', 'css', 'json', 'txt', 'csv', 'md' );
@@ -1684,6 +1724,9 @@ class VR_Tools {
 		}
 		if ( 0 === strpos( $name, 'vr_' ) || preg_match( self::SECRET_PATTERN, $name ) ) {
 			throw new VR_Tool_Error( 'That option holds credentials and cannot be read here.' );
+		}
+		if ( VR_Access::is_form_option( $name ) ) {
+			throw new VR_Tool_Error( 'Form plugin settings cannot be read through the connector.' );
 		}
 		$sentinel = '__vr_missing__';
 		$value    = get_option( $name, $sentinel );

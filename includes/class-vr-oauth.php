@@ -139,6 +139,10 @@ class VR_OAuth {
 			exit;
 		}
 
+		if ( '/vr-oauth/authorize' !== $rel && ! VR_Access::server_allowed( substr( $rel, 10 ) ) ) {
+			self::json( array( 'error' => 'access_denied' ), 403 );
+		}
+
 		switch ( $rel ) {
 			case '/vr-oauth/authorize':
 				self::authorize( $method );
@@ -443,8 +447,8 @@ class VR_OAuth {
 		}
 
 		$user = wp_get_current_user();
-		if ( ! user_can( $user, VR_Settings::get( 'capability' ) ) ) {
-			self::error_page( __( 'Your account does not have permission to connect this site.', 'visual-realm' ) );
+		if ( ! VR_Access::user_allowed( $user ) ) {
+			self::error_page( __( 'Your account is not on this site\'s list of accounts allowed to connect. An administrator can add it under Visual Realm in WordPress admin.', 'visual-realm' ) );
 		}
 
 		if ( 'POST' === $method ) {
@@ -468,6 +472,7 @@ class VR_OAuth {
 				),
 				self::CODE_TTL
 			);
+			VR_Access::notify_connection( $user, $client, $params['redirect_uri'] );
 			self::redirect_to(
 				$params['redirect_uri'],
 				array(
@@ -691,7 +696,7 @@ class VR_OAuth {
 			if ( strlen( $verifier ) < 43 || strlen( $verifier ) > 128 || ! hash_equals( $data['code_challenge'], self::b64url( hash( 'sha256', $verifier, true ) ) ) ) {
 				self::token_error( 'invalid_grant', 'PKCE verification failed.' );
 			}
-			if ( ! user_can( (int) $data['user_id'], VR_Settings::get( 'capability' ) ) ) {
+			if ( ! VR_Access::user_allowed( (int) $data['user_id'] ) ) {
 				self::token_error( 'invalid_grant', 'User no longer has access.' );
 			}
 			self::json( self::issue_tokens( $client['client_id'], (int) $data['user_id'], bin2hex( random_bytes( 16 ) ), (string) $data['resource'] ) );
@@ -712,7 +717,7 @@ class VR_OAuth {
 			if ( strtotime( $row['expires_at'] . ' UTC' ) < time() ) {
 				self::token_error( 'invalid_grant', 'Refresh token expired.' );
 			}
-			if ( ! user_can( (int) $row['user_id'], VR_Settings::get( 'capability' ) ) ) {
+			if ( ! VR_Access::user_allowed( (int) $row['user_id'] ) ) {
 				self::revoke_family( $row['family'] );
 				self::token_error( 'invalid_grant', 'User no longer has access.' );
 			}
@@ -833,7 +838,7 @@ class VR_OAuth {
 			return null;
 		}
 		$user = get_user_by( 'id', (int) $row['user_id'] );
-		if ( ! $user || ! user_can( $user, VR_Settings::get( 'capability' ) ) ) {
+		if ( ! $user || ! VR_Access::user_allowed( $user ) ) {
 			return null;
 		}
 		if ( empty( $row['last_used_at'] ) || strtotime( $row['last_used_at'] . ' UTC' ) < time() - MINUTE_IN_SECONDS ) {
@@ -866,7 +871,7 @@ class VR_OAuth {
 	 * @return bool
 	 */
 	protected static function rate_ok( $bucket, $max, $window ) {
-		$ip  = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '0';
+		$ip  = VR_Access::client_ip();
 		$key = 'vr_rl_' . $bucket . '_' . md5( $ip );
 		$n   = (int) get_transient( $key );
 		if ( $n >= $max ) {

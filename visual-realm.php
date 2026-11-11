@@ -3,7 +3,7 @@
  * Plugin Name:       Visual Realm
  * Plugin URI:        https://thevisualrealm.com
  * Description:       Secure connector that lets Visual Realm build and manage this site's pages, SEO and media.
- * Version:           0.2.2
+ * Version:           0.3.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Visual Realm
@@ -15,13 +15,14 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'VR_PLUGIN_VERSION', '0.2.2' );
+define( 'VR_PLUGIN_VERSION', '0.3.0' );
 define( 'VR_PLUGIN_FILE', __FILE__ );
 define( 'VR_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'VR_DB_VERSION', '1' );
 
 require_once VR_PLUGIN_DIR . 'includes/class-vr-db.php';
 require_once VR_PLUGIN_DIR . 'includes/class-vr-settings.php';
+require_once VR_PLUGIN_DIR . 'includes/class-vr-access.php';
 require_once VR_PLUGIN_DIR . 'includes/class-vr-changes.php';
 require_once VR_PLUGIN_DIR . 'includes/class-vr-oauth.php';
 require_once VR_PLUGIN_DIR . 'includes/class-vr-cache.php';
@@ -31,7 +32,13 @@ require_once VR_PLUGIN_DIR . 'includes/class-vr-updater.php';
 require_once VR_PLUGIN_DIR . 'includes/class-vr-mcp.php';
 require_once VR_PLUGIN_DIR . 'includes/class-vr-admin.php';
 
-register_activation_hook( __FILE__, array( 'VR_DB', 'install' ) );
+register_activation_hook(
+	__FILE__,
+	function () {
+		VR_DB::install();
+		VR_Access::on_activate();
+	}
+);
 
 add_action( 'plugins_loaded', 'vr_plugin_boot' );
 
@@ -40,6 +47,7 @@ add_action( 'plugins_loaded', 'vr_plugin_boot' );
  */
 function vr_plugin_boot() {
 	VR_DB::maybe_upgrade();
+	add_action( 'init', array( 'VR_Access', 'maybe_migrate' ), 0 );
 	VR_OAuth::init();
 	VR_MCP::init();
 	VR_Updater::init();

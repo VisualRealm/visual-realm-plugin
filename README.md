@@ -11,7 +11,12 @@ Connector that lets Visual Realm build and manage a client site through Claude. 
   - Dynamic client registration and client ID metadata documents.
   - Token revocation.
   - Discovery at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`.
-- **Consent screen**: Only users with the chosen capability can connect (Administrators by default). Apps may only return to exact addresses: `https://claude.ai/api/mcp/auth_callback`, any extra exact https addresses added in settings, and Claude Code's `http://localhost:<port>/callback` (can be switched off).
+- **Claude's servers only**: The MCP, token, registration and revocation endpoints answer only Anthropic's published outbound ranges (`160.79.104.0/21`, `153.61.208.0/20`) plus any extra addresses added in settings. Behind Cloudflare, `CF-Connecting-IP` is trusted only when the connection comes from a Cloudflare edge. Refused requests are listed on the settings screen. The sign-in page itself stays reachable from any browser.
+- **Named accounts**: Only the accounts ticked under **Accounts allowed to connect** (and holding the required role) can approve a connection. Unticking an account ends its connections at once. Every ticked account is emailed when a connection is approved or the list changes.
+- **Content walls**: Tools only reach pages, posts, media, menus, reusable blocks, products, Avada portfolio/FAQ/layouts/elements/templates and sliders, plus any types added in settings. Orders, form entries, submissions and similar types can never be added. `wp_get_file` reads media library files only, never form upload folders. Form plugin options (Gravity Forms, WPForms, Contact Form 7, Ninja Forms, Formidable, Forminator, Fluent Forms) cannot be read.
+- **Tool switches**: Any tool except `mcp_ping` can be switched off per site.
+- **Token lifetime**: Access tokens last one hour. Refresh tokens rotate on every use and expire after 30 days without use.
+- **Consent screen**: Only named accounts can connect. Apps may only return to exact addresses: `https://claude.ai/api/mcp/auth_callback`, any extra exact https addresses added in settings, and Claude Code's `http://localhost:<port>/callback` (can be switched off).
 - **Change log with undo**: Every write is snapshotted. Undo from the tool or from the Visual Realm menu in WordPress admin. Snapshots hold only the fields a change touched, so undoing an old edit never reverts a later publish.
 - **Uninstall**: Deleting the plugin drops all tokens and tables, which ends every connection.
 
@@ -45,6 +50,7 @@ Connector that lets Visual Realm build and manage a client site through Claude. 
 - WordPress 6.0+ and PHP 7.4+.
 - Works on hosts that block the root `/.well-known/` folder (SiteGround). Discovery is also served at the issuer path and through `?rest_route=`.
 - Bot protection (Cloudflare WAF, Kinsta) must let `/vr-oauth/*`, `/.well-known/oauth-*` and `/wp-json/visual-realm/*` through.
+- Claude Code runs on your own computer, so with the address restriction on, add your office address under **Server addresses** to use it.
 
 ## Branding
 
@@ -59,10 +65,20 @@ Sites check `github.com/VisualRealm/visual-realm-plugin` releases every six hour
 - the signature verifies against the Ed25519 public key built into the plugin;
 - the zip contains the same version as the release tag, and that version is newer than the installed one.
 
+## Tests
+
+`tests/run.sh` builds a throwaway WordPress + SQLite site and runs four suites: end to end (normal host and simulated SiteGround), security, and upgrade/self-update. It needs PHP 8 with sqlite and sodium, Python 3 with `requests`, and the signing key:
+
+```
+VR_SIGNING_KEY_FILE=/path/to/vr-release-signing.secret tests/run.sh
+```
+
+GitHub Actions runs the suites on every push against WordPress 6.9 and the latest release. Tests are left out of the release zip.
+
 To publish a release:
 
 1. Bump `Version:` and `VR_PLUGIN_VERSION` in `visual-realm.php`.
-2. Push to `main`. The Release workflow sees a version with no release yet, builds the zip, signs it with the `VR_SIGNING_KEY` repository secret, checks the signature against the key built into the plugin, and publishes release `vX.Y.Z` with both files. It can also be started by hand under Actions → Release → Run workflow.
+2. Push to `main`. After the tests pass, the workflow sees a version with no release yet, builds the zip, signs it with the `VR_SIGNING_KEY` repository secret, checks the signature against the key built into the plugin, and publishes release `vX.Y.Z` with both files. It can also be started by hand under Actions → Test and release → Run workflow.
 
 To build by hand instead: `VR_SIGNING_KEY_FILE=/path/to/vr-release-signing.secret bin/build-release.sh`, then upload `dist/visual-realm.zip` and `dist/visual-realm.zip.sig` to a release tagged `vX.Y.Z`.
 

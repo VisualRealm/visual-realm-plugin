@@ -1,24 +1,67 @@
-name: Release
+name: Test and release
 
-# Publishes a signed release whenever main carries a plugin version that has no release yet.
+# Every push runs the full test suite. On main, a plugin version with no release yet
+# is built, signed and published, but only after the tests pass.
 on:
   push:
-    branches: [main]
-    paths:
-      - visual-realm.php
-      - .github/workflows/release.yml
-      - bin/build-release.sh
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        wp: ["6.9", "latest"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: sqlite3, pdo_sqlite, sodium, zip, mbstring, dom, libxml
+          coverage: none
+
+      - name: Lint PHP
+        run: for f in $(git ls-files '*.php'); do php -l "$f" > /dev/null || exit 1; done
+
+      - name: Python requirements
+        run: pip install requests
+
+      - name: Run suites
+        env:
+          VR_SIGNING_KEY: ${{ secrets.VR_SIGNING_KEY }}
+          WP_VERSION: ${{ matrix.wp }}
+          SQLITE_PLUGIN_VERSION: latest
+        run: |
+          keyfile="$RUNNER_TEMP/signing.key"
+          if [ -n "$VR_SIGNING_KEY" ]; then
+            printf '%s' "$VR_SIGNING_KEY" > "$keyfile"
+          else
+            # Forks and pull requests have no secret: sign test releases with a throwaway key.
+            php -r 'echo base64_encode(sodium_crypto_sign_secretkey(sodium_crypto_sign_keypair()));' > "$keyfile"
+            echo "::warning::VR_SIGNING_KEY not available; signed-update tests use a throwaway key and will fail."
+          fi
+          VR_SIGNING_KEY_FILE="$keyfile" VR_TEST_ROOT="$RUNNER_TEMP/site" tests/run.sh
+          rm -f "$keyfile"
+
+      - name: Server log on failure
+        if: failure()
+        run: tail -100 "$RUNNER_TEMP/site/server.log" "$RUNNER_TEMP/site/wp/wp-content/debug.log" || true
+
   release:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +107,11 @@ jobs:
           $ok = sodium_crypto_sign_verify_detached(base64_decode(file_get_contents("dist/visual-realm.zip.sig")), file_get_contents("dist/visual-realm.zip"), base64_decode($m[1]));
           if (!$ok) { fwrite(STDERR, "Signature does not match the plugin public key\n"); exit(1); }
           echo "signature ok\n";'
+
+      - name: Check the zip carries no test or build files
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          ! unzip -l dist/visual-realm.zip | grep -E "visual-realm/(tests|bin|\.github|dist)/"
 
       - name: Publish release
         if: steps.check.outputs.skip == 'false'
