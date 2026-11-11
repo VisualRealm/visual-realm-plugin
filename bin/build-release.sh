@@ -14,7 +14,7 @@ stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 
 mkdir -p "$stage/visual-realm" "$out"
-(cd "$here" && tar --exclude=.git --exclude=bin --exclude=dist --exclude=.gitignore --exclude='*.DS_Store' -cf - .) | (cd "$stage/visual-realm" && tar -xf -)
+(cd "$here" && tar --exclude=.git --exclude=bin --exclude=dist --exclude=.github --exclude=.gitignore --exclude='*.DS_Store' -cf - .) | (cd "$stage/visual-realm" && tar -xf -)
 rm -f "$out/visual-realm.zip" "$out/visual-realm.zip.sig"
 (cd "$stage" && zip -qr "$out/visual-realm.zip" visual-realm)
 

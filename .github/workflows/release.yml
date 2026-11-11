@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches plugin version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(grep -oE "VR_PLUGIN_VERSION', '[0-9.]+" visual-realm.php | grep -oE '[0-9.]+$')"
+          header="$(grep -oE '^ \* Version: +[0-9.]+' visual-realm.php | grep -oE '[0-9.]+$')"
+          echo "tag=$tag constant=$version header=$header"
+          test "$tag" = "$version" && test "$tag" = "$header"
+
+      - name: Build and sign
+        env:
+          VR_SIGNING_KEY: ${{ secrets.VR_SIGNING_KEY }}
+        run: |
+          test -n "$VR_SIGNING_KEY" || { echo "Add the VR_SIGNING_KEY repository secret"; exit 1; }
+          php -r 'exit(function_exists("sodium_crypto_sign_detached") ? 0 : 1);'
+          keyfile="$RUNNER_TEMP/signing.key"
+          printf '%s' "$VR_SIGNING_KEY" > "$keyfile"
+          VR_SIGNING_KEY_FILE="$keyfile" bin/build-release.sh dist
+          rm -f "$keyfile"
+
+      - name: Check signature matches the key built into the plugin
+        run: |
+          php -r '
+          preg_match("/PUBLIC_KEY = \x27([^\x27]+)\x27/", file_get_contents("includes/class-vr-updater.php"), $m);
+          $ok = sodium_crypto_sign_verify_detached(base64_decode(file_get_contents("dist/visual-realm.zip.sig")), file_get_contents("dist/visual-realm.zip"), base64_decode($m[1]));
+          if (!$ok) { fwrite(STDERR, "Signature does not match the plugin public key\n"); exit(1); }
+          echo "signature ok\n";'
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/visual-realm.zip dist/visual-realm.zip.sig \
+            --title "${GITHUB_REF_NAME#v}" --generate-notes

@@ -61,8 +61,9 @@ Sites check `github.com/VisualRealm/visual-realm-plugin` releases every six hour
 
 To publish a release:
 
-1. Bump `Version:` and `VR_PLUGIN_VERSION` in `visual-realm.php`.
-2. Run `VR_SIGNING_KEY_FILE=/path/to/vr-release-signing.secret bin/build-release.sh`.
-3. Create a GitHub release tagged `vX.Y.Z` and upload `dist/visual-realm.zip` and `dist/visual-realm.zip.sig`.
+1. Bump `Version:` and `VR_PLUGIN_VERSION` in `visual-realm.php` and commit.
+2. Push a tag such as `v0.2.1`. The Release workflow builds the zip, signs it with the `VR_SIGNING_KEY` repository secret, checks the signature against the key built into the plugin, and publishes the release with both files.
+
+To build by hand instead: `VR_SIGNING_KEY_FILE=/path/to/vr-release-signing.secret bin/build-release.sh`, then upload `dist/visual-realm.zip` and `dist/visual-realm.zip.sig` to a release tagged `vX.Y.Z`.
 
 Keep the signing key out of the repo. Store it in a password manager or as a GitHub Actions secret. If the repository is private, enter a read-only, single-repository GitHub token under **Update access token** on each site.
