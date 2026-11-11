@@ -454,7 +454,12 @@ class VR_Access {
 	 * @return bool
 	 */
 	public static function meta_writable( $key ) {
-		return is_string( $key ) && '' !== $key && ! preg_match( self::PROTECTED_META, $key );
+		// The database matches meta keys case-insensitively and ignores trailing
+		// spaces, so the check runs on the normalized key and odd keys are refused.
+		if ( ! is_string( $key ) || '' === $key || ! preg_match( '/^[A-Za-z0-9_\-:.]+$/', $key ) ) {
+			return false;
+		}
+		return ! preg_match( self::PROTECTED_META, strtolower( $key ) );
 	}
 
 	/**

@@ -165,7 +165,8 @@ class VR_Admin {
 		}
 		if ( $changes ) {
 			$who = wp_get_current_user();
-			VR_Access::alert( 'Visual Realm security settings changed', array_merge( $changes, array( 'Changed by: ' . $who->user_login, 'From address: ' . VR_Access::client_ip() ) ) );
+			$recipients = array_unique( array_merge( (array) $before['allowed_users'], VR_Access::allowed_users() ) );
+			VR_Access::alert( 'Visual Realm security settings changed', array_merge( $changes, array( 'Changed by: ' . $who->user_login, 'From address: ' . VR_Access::client_ip() ) ), array_map( 'absint', $recipients ) );
 		}
 		self::back( 'saved' );
 	}

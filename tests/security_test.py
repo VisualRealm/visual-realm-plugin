@@ -217,6 +217,15 @@ for k in ["_wp_attached_file", "_wp_attachment_metadata", "_menu_item_object_id"
     check("protected meta write refused: " + k, err, o)
     err, o = tool(AT, "wp_delete_post_meta", {"id": img2["id"], "key": k})
     check("protected meta delete refused: " + k, err, o)
+for k in ["_WP_ATTACHED_FILE", "_Wp_Attached_File", "_wp_attached_file ", "_MENU_ITEM_OBJECT", "_wp_attached_file\n", "_Thumbnail_ID"]:
+    err, o = tool(AT, "wp_update_post_meta", {"id": img2["id"], "key": k, "value": "2026/11/other.png"})
+    check("protected meta write refused (case/space variant): " + repr(k), err, o)
+check("attachment path untouched", php("echo get_post_meta(%d,'_wp_attached_file',true);" % img2["id"]).startswith("2026/"))
+err, o = tool(AT, "wp_update_post_meta", {"id": img2["id"], "key": "rank_math_title", "value": "ok"})
+check("ordinary meta still writable", not err, o)
+err, o = tool(AT, "wp_upload_media", {"data": png, "filename": "attach-to-order.png", "post_id": order})
+check("upload cannot attach to a walled post", err, o)
+open(f"{up}/fusion-forms/7/receipt.html", "w").write("SSN 123-45-6789") if os.path.isdir(f"{up}/fusion-forms/7") else None
 for d_, fname in [("fusion-forms/7", "loan-app.txt"), ("wpallexport/exports", "orders.csv"), ("woocommerce_uploads", "file.pdf")]:
     os.makedirs(f"{up}/{d_}", exist_ok=True)
     open(f"{up}/{d_}/{fname}", "w").write("SSN 123-45-6789")
@@ -226,7 +235,9 @@ for d_, fname in [("fusion-forms/7", "loan-app.txt"), ("wpallexport/exports", "o
     err, f = tool(AT, "wp_get_rendered", {"url": f"{BASE}/wp-content/uploads/{d_}/{fname}"})
     check(f"rendered fetch refuses uploads: {d_}", err and "123-45-6789" not in str(f), f)
 for u in [BASE + "/wp-content/debug.log", BASE + "/wp-json/wp/v2/users", BASE + "/?rest_route=/wp/v2/users", BASE + "/wp-admin/",
-          BASE + "/wp-content/uploads/2026/11/loose-notes.txt", BASE + "/backup.sql", BASE + "/%77p-content/debug.log"]:
+          BASE + "/wp-content/uploads/2026/11/loose-notes.txt", BASE + "/backup.sql", BASE + "/%77p-content/debug.log",
+          BASE + "/./wp-content/uploads/fusion-forms/7/receipt.html", BASE + "/x/../wp-content/uploads/fusion-forms/7/receipt.html",
+          BASE + "//wp-content/uploads/fusion-forms/7/receipt.html", BASE + "/index.php/wp-json/wp/v2/users", BASE + "/%2e/wp-content/uploads/fusion-forms/7/receipt.html"]:
     err, f = tool(AT, "wp_get_rendered", {"url": u})
     check("rendered fetch refuses " + u.replace(BASE, ""), err, f)
 err, f = tool(AT, "wp_get_rendered", {"url": BASE + "/robots.txt"})

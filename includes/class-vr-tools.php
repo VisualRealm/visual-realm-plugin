@@ -1035,7 +1035,8 @@ class VR_Tools {
 		$query     = strtolower( rawurldecode( isset( $parts['query'] ) ? $parts['query'] : '' ) );
 		$ext       = pathinfo( $rel_path, PATHINFO_EXTENSION );
 		$page_like = '' === $ext || in_array( $ext, array( 'html', 'htm' ), true ) || '/robots.txt' === $rel_path || preg_match( '#^/[a-z0-9_\-]*sitemap[a-z0-9_\-]*\.xml$#', $rel_path );
-		if ( ! $page_like || preg_match( '#^/(wp-content|wp-includes|wp-admin|wp-json|xmlrpc|wp-login)#', $rel_path ) || false !== strpos( $query, 'rest_route' ) || false !== strpos( $rel_path, '..' ) ) {
+		$odd       = preg_match( '#(^|/)\.{1,2}(/|$)|//|\\\\|index\.php/#', $rel_path );
+		if ( $odd || ! $page_like || preg_match( '#/(wp-content|wp-includes|wp-admin|wp-json|xmlrpc|wp-login)#', $rel_path ) || false !== strpos( $query, 'rest_route' ) ) {
 			throw new VR_Tool_Error( 'wp_get_rendered checks pages, not files or API endpoints. Use wp_get_file for media.' );
 		}
 		$fetch = add_query_arg( 'vr_nocache', wp_generate_password( 8, false ), $url );
@@ -1213,6 +1214,9 @@ class VR_Tools {
 			'tmp_name' => $tmp,
 		);
 		$post_id = self::int( $a, 'post_id', 0 );
+		if ( $post_id && ( ! get_post( $post_id ) || ! VR_Access::post_type_allowed( get_post_type( $post_id ) ) ) ) {
+			throw new VR_Tool_Error( 'post_id not found.' );
+		}
 		$extra   = array();
 		if ( '' !== self::str( $a, 'title' ) ) {
 			$extra['post_title'] = self::str( $a, 'title' );
